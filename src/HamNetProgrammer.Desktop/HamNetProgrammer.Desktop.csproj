@@ -1,0 +1,62 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <WindowsPackageType>None</WindowsPackageType>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>HamNetProgrammer.Desktop</RootNamespace>
+    <ApplicationTitle>HamNetProgrammer</ApplicationTitle>
+    <ApplicationId>io.hamnetprogrammer.app</ApplicationId>
+    <ApplicationIdGuid>B2C3D4E5-F6A7-8901-BCDE-F12345678901</ApplicationIdGuid>
+    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+    <ApplicationVersion>1</ApplicationVersion>
+    <Version>0.1.0</Version>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWinUI>true</UseWinUI>
+    <!-- Matches PacketCluster's WinUI3 desktop app (same house pattern) - Release crashes on
+         launch with a native fault in a WinAppSDK DLL immediately after the shell window is
+         constructed; a known CsWinRT/WinRT interop GC-lifetime class of bug. Debug (unoptimized)
+         doesn't hit it. Self-contained distributable builds must be published as Debug for the
+         same reason - see PacketCluster's PacketCluster.csproj for the fuller writeup. -->
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260529003" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HamNetProgrammer.Core\HamNetProgrammer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- `dotnet publish` on this unpackaged WinUI3 app shape drops compiled XAML (.xbf) and the
+       .pri resource index from the publish output even though Build produces them correctly -
+       without them the published exe crashes immediately on launch (native fault, no managed
+       exception). Same fix as PacketCluster's FixPublishMissingXamlAssets target. -->
+  <Target Name="FixPublishMissingXamlAssets" AfterTargets="Publish">
+    <ItemGroup>
+      <_MissingPublishFiles Include="$(OutDir)App.xbf" />
+      <_MissingPublishFiles Include="$(OutDir)HamNetProgrammer.Desktop.pri" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_MissingPublishFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="false" Condition="Exists('$(OutDir)App.xbf')" />
+
+    <ItemGroup>
+      <_MissingPublishViewFiles Include="$(OutDir)Views\**\*.xbf" Condition="Exists('$(OutDir)Views')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_MissingPublishViewFiles)" DestinationFolder="$(PublishDir)Views\%(RecursiveDir)" SkipUnchangedFiles="false" Condition="Exists('$(OutDir)Views')" />
+
+    <ItemGroup>
+      <_MissingPublishNativeFiles Include="$(OutDir)win-x64\**\*.*" Condition="Exists('$(OutDir)win-x64')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_MissingPublishNativeFiles)" DestinationFolder="$(PublishDir)win-x64\%(RecursiveDir)" SkipUnchangedFiles="false" Condition="Exists('$(OutDir)win-x64')" />
+  </Target>
+
+</Project>

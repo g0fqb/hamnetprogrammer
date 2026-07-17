@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HamNetProgrammer.Core", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HamNetProgrammer.Cli", "src\HamNetProgrammer.Cli\HamNetProgrammer.Cli.csproj", "{6FE11C2E-FCD2-4C86-A0D2-F6EE4F013668}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HamNetProgrammer.Desktop", "src\HamNetProgrammer.Desktop\HamNetProgrammer.Desktop.csproj", "{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,6 +45,18 @@ Global
 		{6FE11C2E-FCD2-4C86-A0D2-F6EE4F013668}.Release|x64.Build.0 = Release|Any CPU
 		{6FE11C2E-FCD2-4C86-A0D2-F6EE4F013668}.Release|x86.ActiveCfg = Release|Any CPU
 		{6FE11C2E-FCD2-4C86-A0D2-F6EE4F013668}.Release|x86.Build.0 = Release|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Debug|x64.Build.0 = Debug|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Debug|x86.Build.0 = Debug|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Release|x64.ActiveCfg = Release|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Release|x64.Build.0 = Release|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Release|x86.ActiveCfg = Release|Any CPU
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -50,5 +64,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{CAA8B400-D581-4FC6-9F95-A91F850FEAFE} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{6FE11C2E-FCD2-4C86-A0D2-F6EE4F013668} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{0C357E9A-0C7A-4C5A-8DE2-DC1869D53C42} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

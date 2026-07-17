@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page x:Class="HamNetProgrammer.Desktop.Views.RadioPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Background="#10161d">
+
+    <StackPanel Padding="16" Spacing="14" MaxWidth="700">
+        <TextBlock Text="Radio" FontSize="22" FontWeight="Bold" Foreground="#e0924a" />
+        <TextBlock Foreground="#8896a0" FontSize="13" TextWrapping="Wrap">
+            Reading from and writing to the radio is handled by the command-line tool for now
+            (dump / encode / write-codeplug). A connected view here - port picker, live
+            read/write with progress, and verification - is planned next.
+        </TextBlock>
+
+        <Border Background="#1a232c" CornerRadius="6" Padding="14">
+            <StackPanel Spacing="8">
+                <TextBlock Text="Available serial ports" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                <ListView x:Name="PortListView" Background="#212c36" CornerRadius="4" />
+                <Button x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</Page>

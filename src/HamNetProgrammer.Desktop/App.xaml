@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Application x:Class="HamNetProgrammer.Desktop.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             RequestedTheme="Dark">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- App-wide colors - dark schematic/blueprint palette, matching the CLI's HTML
+                 preview, distinct from PacketCluster's navy/pink so the two apps read as
+                 siblings rather than the same app re-skinned. -->
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#10161d"/>
+            <SolidColorBrush x:Key="AppSidebarBrush" Color="#1a232c"/>
+            <SolidColorBrush x:Key="AppAccentBrush" Color="#e0924a"/>
+            <SolidColorBrush x:Key="AppTealBrush" Color="#6bb0b8"/>
+            <SolidColorBrush x:Key="AppSurfaceBrush" Color="#212c36"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
