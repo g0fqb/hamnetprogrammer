@@ -226,19 +226,27 @@ public static class AnyToneD878CodeplugEncoder
 
     private static IEnumerable<EncodedRegion> EncodeTalkGroups(SqliteConnection db, Dictionary<long, uint> contactIndex)
     {
-        var listBuffer = new byte[10000 * 100];
+        var contactCount = contactIndex.Count;
+        // Only the used portion of the list is written - see the writer method's remarks for why.
+        // Rounded up to a 16-byte boundary since writes must be in exactly-16-byte chunks; the
+        // few trailing pad bytes beyond the last real record stay zero, which is harmless since
+        // the used bitmap is the authority on which slots are real.
+        var listLength = ((contactCount * 100) + 15) / 16 * 16;
+        var listBuffer = new byte[listLength];
         var usedBuffer = new byte[1264];
         Array.Fill(usedBuffer, (byte)0xFF); // inverted convention: 1 = not used
 
         var controlBuffer = new byte[10000 * 4];
         Array.Fill(controlBuffer, (byte)0xFF); // 0xFFFFFFFF = empty slot
 
-        // The doc notes "more management information at 0x04340000 when writing" talk groups -
-        // confirmed necessary on real hardware: without this offset table, TalkGroupList writes
-        // are silently ACKed but never actually committed to flash (Channels/Zones commit fine
-        // without any equivalent table, so this is specific to the talk group list). Each entry
-        // is the DMR ID BCD-digits-as-hex-value, left-shifted 1 bit with bit0 set for group calls,
-        // plus the 0-based list position, both 4-byte little-endian, sorted ascending by the key.
+        // The doc notes "more management information at 0x04340000 when writing" talk groups.
+        // The actual root cause of TalkGroupList writes being silently ACKed-but-discarded turned
+        // out to be size (writing the full 10,000-slot/1MB region in one go, versus writing only
+        // the used ~23 entries, which is what fixed it) - this offset table was tried first and
+        // kept since it's cheap and doc-specified, but wasn't independently proven necessary once
+        // the real fix (writing less data) was found. Each entry is the DMR ID BCD-digits-as-
+        // hex-value, left-shifted 1 bit with bit0 set for group calls, plus the 0-based list
+        // position, both 4-byte little-endian, sorted ascending by the key.
         var offsetEntries = new List<(uint Key, uint Position)>();
 
         using var cmd = db.CreateCommand();
@@ -275,10 +283,10 @@ public static class AnyToneD878CodeplugEncoder
             WriteUInt32LE(offsetBuffer, i * 8 + 4, offsetEntries[i].Position);
         }
 
-        yield return new EncodedRegion("TalkGroupList", 0x02680000, listBuffer);
         yield return new EncodedRegion("TalkGroupListUsed", 0x02640000, usedBuffer);
         yield return new EncodedRegion("TalkGroupsControlData", 0x02600000, controlBuffer);
         yield return new EncodedRegion("TalkGroupOffsets", 0x04340000, offsetBuffer);
+        yield return new EncodedRegion("TalkGroupList", 0x02680000, listBuffer);
     }
 
     private static uint BcdDigitsAsHexValue(long decimalValue, int byteCount)
