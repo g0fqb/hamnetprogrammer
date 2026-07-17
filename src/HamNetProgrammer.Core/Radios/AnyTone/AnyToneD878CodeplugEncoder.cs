@@ -131,13 +131,27 @@ public static class AnyToneD878CodeplugEncoder
         _ => 2,
     };
 
+    // ZoneAChannel (0x02500100) and ZoneBChannel (0x02500300) - the default displayed channel per
+    // zone - are NOT emitted here. They live inside a 256KB flash erase block (0x02500000-
+    // 0x0253FFFF) shared with several other settings sections (power-on message, APRS, DTMF list,
+    // etc.) that this encoder does not otherwise know about or intend to touch. Writing this pair
+    // of small regions in isolation erases the ENTIRE containing block and only reprograms these
+    // 1024 bytes, silently wiping everything else sharing it - confirmed the hard way on real
+    // hardware (2026-07-17): it wiped the power-on password setting, welcome message, and APRS
+    // config. AnyToneD878CodeplugWriter handles this pair specially: it reads the live device's
+    // current content for that whole block first, splices in zeroed Zone A/B Channel data (every
+    // zone defaults to its first channel), and writes the merged result back as one region -
+    // preserving whatever else is actually on the user's radio rather than guessing or omitting it.
+    public const uint ZoneChannelDefaultsBlockAddress = 0x02500000;
+    public const int ZoneChannelDefaultsBlockLength = 0x1900; // covers every documented section up to AnalogAprsList
+    public const int ZoneAChannelOffset = 0x0100;
+    public const int ZoneBChannelOffset = 0x0300;
+
     private static IEnumerable<EncodedRegion> EncodeZones(SqliteConnection db)
     {
         var zonesBuffer = new byte[ZoneRecordCodec.MaxMembers > 0 ? 250 * 512 : 0];
         var namesBuffer = new byte[250 * 32];
         var usedBuffer = new byte[32];
-        var zoneAChannel = new byte[512]; // 250 x 2 bytes, rounded up to the next section boundary
-        var zoneBChannel = new byte[512];
 
         using var zonesCmd = db.CreateCommand();
         zonesCmd.CommandText = "SELECT Id, Name FROM Zones ORDER BY Id;";
@@ -167,17 +181,12 @@ public static class AnyToneD878CodeplugEncoder
             AsciiFieldCodec.Encode(zoneName, 32).CopyTo(namesBuffer, zoneIndex * 32);
             SetBit(usedBuffer, zoneIndex);
 
-            WriteUInt16LE(zoneAChannel, zoneIndex * 2, 0); // default: first channel in the zone
-            WriteUInt16LE(zoneBChannel, zoneIndex * 2, 0);
-
             zoneIndex++;
         }
 
         yield return new EncodedRegion("Zones", 0x01000000, zonesBuffer);
         yield return new EncodedRegion("ZoneNames", 0x02540000, namesBuffer);
         yield return new EncodedRegion("ZonesUsed", 0x024c1300, usedBuffer);
-        yield return new EncodedRegion("ZoneAChannel", 0x02500100, zoneAChannel);
-        yield return new EncodedRegion("ZoneBChannel", 0x02500300, zoneBChannel);
     }
 
     private static IEnumerable<EncodedRegion> EncodeScanLists(SqliteConnection db)
@@ -322,12 +331,6 @@ public static class AnyToneD878CodeplugEncoder
 
     private static void SetBit(byte[] buffer, int index0Based) => buffer[index0Based / 8] |= (byte)(1 << (index0Based % 8));
     private static void ClearBit(byte[] buffer, int index0Based) => buffer[index0Based / 8] &= (byte)~(1 << (index0Based % 8));
-
-    private static void WriteUInt16LE(byte[] buffer, int offset, ushort value)
-    {
-        buffer[offset] = (byte)value;
-        buffer[offset + 1] = (byte)(value >> 8);
-    }
 
     private static void WriteUInt32LE(byte[] buffer, int offset, uint value)
     {
