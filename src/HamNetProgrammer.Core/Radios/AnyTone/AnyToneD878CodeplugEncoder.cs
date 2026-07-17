@@ -233,24 +233,60 @@ public static class AnyToneD878CodeplugEncoder
         var controlBuffer = new byte[10000 * 4];
         Array.Fill(controlBuffer, (byte)0xFF); // 0xFFFFFFFF = empty slot
 
+        // The doc notes "more management information at 0x04340000 when writing" talk groups -
+        // confirmed necessary on real hardware: without this offset table, TalkGroupList writes
+        // are silently ACKed but never actually committed to flash (Channels/Zones commit fine
+        // without any equivalent table, so this is specific to the talk group list). Each entry
+        // is the DMR ID BCD-digits-as-hex-value, left-shifted 1 bit with bit0 set for group calls,
+        // plus the 0-based list position, both 4-byte little-endian, sorted ascending by the key.
+        var offsetEntries = new List<(uint Key, uint Position)>();
+
         using var cmd = db.CreateCommand();
         cmd.CommandText = "SELECT Id, Name, DmrId FROM Contacts ORDER BY Id;";
         using var reader = cmd.ExecuteReader();
+        var syntheticId = 999_901u; // placeholder range for contacts with no real DMR ID (e.g. PARROT, Echo Test)
         while (reader.Read())
         {
             var id = reader.GetInt64(0);
             var index = (int)contactIndex[id];
             var name = reader.GetString(1);
-            var dmrId = reader.IsDBNull(2) ? 0u : (uint)reader.GetInt64(2);
+            // Contacts without a real DMR ID (non-numeric names like "PARROT") get a distinct
+            // synthetic placeholder rather than all sharing 0 - the offset table below is keyed
+            // by this value, and duplicate keys there would collide/be ambiguous to the firmware.
+            var dmrId = reader.IsDBNull(2) ? syntheticId++ : (uint)reader.GetInt64(2);
 
             TalkGroupRecordCodec.Encode(new TalkGroupRecord(name, dmrId)).CopyTo(listBuffer, index * 100);
             ClearBit(usedBuffer, index); // 0 = used, per the inverted convention confirmed against real data
             WriteUInt32LE(controlBuffer, index * 4, (uint)index);
+
+            var bcdKey = BcdDigitsAsHexValue(dmrId, 4);
+            var shiftedKey = (bcdKey << 1) | 1u; // TalkGroupRecordCodec always writes Group Call entries
+            offsetEntries.Add((shiftedKey, (uint)index));
+        }
+
+        offsetEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
+        if (offsetEntries.Count % 2 != 0)
+            offsetEntries.Add((0xFFFFFFFF, 0xFFFFFFFF)); // pad to a full 16-byte (2-entry) write chunk, per doc
+
+        var offsetBuffer = new byte[offsetEntries.Count * 8];
+        for (var i = 0; i < offsetEntries.Count; i++)
+        {
+            WriteUInt32LE(offsetBuffer, i * 8, offsetEntries[i].Key);
+            WriteUInt32LE(offsetBuffer, i * 8 + 4, offsetEntries[i].Position);
         }
 
         yield return new EncodedRegion("TalkGroupList", 0x02680000, listBuffer);
         yield return new EncodedRegion("TalkGroupListUsed", 0x02640000, usedBuffer);
         yield return new EncodedRegion("TalkGroupsControlData", 0x02600000, controlBuffer);
+        yield return new EncodedRegion("TalkGroupOffsets", 0x04340000, offsetBuffer);
+    }
+
+    private static uint BcdDigitsAsHexValue(long decimalValue, int byteCount)
+    {
+        var bcdBytes = BcdCodec.Encode(decimalValue, byteCount);
+        uint result = 0;
+        foreach (var b in bcdBytes) result = (result << 8) | b;
+        return result;
     }
 
     private static IEnumerable<EncodedRegion> EncodeRadioIds(SqliteConnection db, Dictionary<long, byte> radioIdIndex)
