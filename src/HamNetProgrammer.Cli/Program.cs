@@ -29,6 +29,9 @@ if (args.Length > 0 && args[0].Equals("preview", StringComparison.OrdinalIgnoreC
 if (args.Length > 0 && args[0].Equals("validate-codecs", StringComparison.OrdinalIgnoreCase))
     return RunValidateCodecs(args.Skip(1).ToArray());
 
+if (args.Length > 0 && args[0].Equals("encode", StringComparison.OrdinalIgnoreCase))
+    return RunEncode(args.Skip(1).ToArray());
+
 var positional = args.Where(a => !a.Equals("dump", StringComparison.OrdinalIgnoreCase)).ToArray();
 var runDump = args.Any(a => a.Equals("dump", StringComparison.OrdinalIgnoreCase));
 
@@ -254,6 +257,41 @@ static int RunPreview(string[] previewArgs)
     using var db = CodeplugDatabase.OpenOrCreate(dbPath);
     CodeplugPreviewBuilder.BuildToFile(db, outputPath);
     Console.WriteLine($"Preview written to {outputPath}");
+    return 0;
+}
+
+static int RunEncode(string[] encodeArgs)
+{
+    var dbPath = encodeArgs.Length > 0
+        ? encodeArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+    var outputDir = encodeArgs.Length > 1
+        ? encodeArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "encoded"));
+
+    Directory.CreateDirectory(outputDir);
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var regions = AnyToneD878CodeplugEncoder.Build(db);
+
+    var binaryPath = Path.Combine(outputDir, "codeplug_image.bin");
+    var manifestPath = Path.Combine(outputDir, "codeplug_image.manifest.csv");
+
+    using (var output = new FileStream(binaryPath, FileMode.Create, FileAccess.Write))
+    using (var manifest = new StreamWriter(Path.Combine(outputDir, "codeplug_image.manifest.csv")))
+    {
+        manifest.WriteLine("Name,Address,Length,FileOffset");
+        foreach (var region in regions.OrderBy(r => r.Address))
+        {
+            manifest.WriteLine($"{region.Name},0x{region.Address:x8},{region.Data.Length},{output.Position}");
+            output.Write(region.Data, 0, region.Data.Length);
+        }
+    }
+
+    var totalBytes = regions.Sum(r => (long)r.Data.Length);
+    Console.WriteLine($"Encoded {regions.Count} regions, {totalBytes:N0} bytes.");
+    Console.WriteLine($"Binary: {binaryPath}");
+    Console.WriteLine($"Manifest: {manifestPath}");
     return 0;
 }
 
