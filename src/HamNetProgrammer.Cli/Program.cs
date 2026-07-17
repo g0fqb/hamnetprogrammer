@@ -32,7 +32,12 @@ if (args.Length > 0 && args[0].Equals("validate-codecs", StringComparison.Ordina
 if (args.Length > 0 && args[0].Equals("encode", StringComparison.OrdinalIgnoreCase))
     return RunEncode(args.Skip(1).ToArray());
 
-var positional = args.Where(a => !a.Equals("dump", StringComparison.OrdinalIgnoreCase)).ToArray();
+var peekAddressArg = args.FirstOrDefault(a => a.StartsWith("peek=", StringComparison.OrdinalIgnoreCase));
+var pokeArg = args.FirstOrDefault(a => a.StartsWith("poke=", StringComparison.OrdinalIgnoreCase));
+var positional = args.Where(a =>
+    !a.Equals("dump", StringComparison.OrdinalIgnoreCase) &&
+    !a.StartsWith("peek=", StringComparison.OrdinalIgnoreCase) &&
+    !a.StartsWith("poke=", StringComparison.OrdinalIgnoreCase)).ToArray();
 var runDump = args.Any(a => a.Equals("dump", StringComparison.OrdinalIgnoreCase));
 
 var ports = SerialPort.GetPortNames();
@@ -80,7 +85,23 @@ try
     var id = radio.ReadDeviceId();
     Console.WriteLine($"Device identifier: {id}");
 
-    if (runDump)
+    if (peekAddressArg is not null)
+    {
+        var addr = Convert.ToUInt32(peekAddressArg["peek=".Length..], 16);
+        var data = radio.ReadMemory(addr, 64);
+        Console.WriteLine($"  0x{addr:x8}: {Convert.ToHexString(data)}");
+    }
+    else if (pokeArg is not null)
+    {
+        var parts = pokeArg["poke=".Length..].Split(':');
+        var addr = Convert.ToUInt32(parts[0], 16);
+        var bytes = Convert.FromHexString(parts[1]);
+        if (bytes.Length % 16 != 0) throw new InvalidOperationException("poke data must be a multiple of 16 bytes.");
+        for (var i = 0; i < bytes.Length; i += 16)
+            radio.WriteMemory(addr + (uint)i, bytes.AsSpan(i, 16));
+        Console.WriteLine($"  Wrote {bytes.Length} bytes to 0x{addr:x8} (commits at END).");
+    }
+    else if (runDump)
     {
         RunFullDump(radio);
     }

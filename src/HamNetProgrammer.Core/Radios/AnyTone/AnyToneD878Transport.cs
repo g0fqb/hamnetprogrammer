@@ -84,7 +84,15 @@ public sealed class AnyToneD878Transport : IDisposable
         return data;
     }
 
-    /// <summary>Writes exactly 16 bytes at the given address. The radio does not accept other lengths.</summary>
+    /// <summary>
+    /// Writes exactly 16 bytes at the given address. The radio does not accept other lengths.
+    ///
+    /// Confirmed on real hardware (2026-07-17): writes are buffered, not applied immediately -
+    /// <see cref="ReadMemory"/> within the same session still returns the pre-write flash content.
+    /// The actual flash commit happens when <see cref="EndProgrammingSession"/> is sent, at which
+    /// point the device drops off USB and re-enumerates ~10-15s later. To verify a write, end the
+    /// session, wait for the port to reappear, then open a new session and read back.
+    /// </summary>
     public void WriteMemory(uint address, ReadOnlySpan<byte> data)
     {
         if (data.Length != 0x10)
