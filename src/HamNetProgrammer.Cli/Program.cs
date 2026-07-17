@@ -26,6 +26,9 @@ if (args.Length > 0 && args[0].Equals("export-json", StringComparison.OrdinalIgn
 if (args.Length > 0 && args[0].Equals("preview", StringComparison.OrdinalIgnoreCase))
     return RunPreview(args.Skip(1).ToArray());
 
+if (args.Length > 0 && args[0].Equals("validate-codecs", StringComparison.OrdinalIgnoreCase))
+    return RunValidateCodecs(args.Skip(1).ToArray());
+
 var positional = args.Where(a => !a.Equals("dump", StringComparison.OrdinalIgnoreCase)).ToArray();
 var runDump = args.Any(a => a.Equals("dump", StringComparison.OrdinalIgnoreCase));
 
@@ -252,6 +255,43 @@ static int RunPreview(string[] previewArgs)
     CodeplugPreviewBuilder.BuildToFile(db, outputPath);
     Console.WriteLine($"Preview written to {outputPath}");
     return 0;
+}
+
+static int RunValidateCodecs(string[] validateArgs)
+{
+    var binaryPath = validateArgs.Length > 0
+        ? validateArgs[0]
+        : FindLatestDump();
+    var manifestPath = validateArgs.Length > 1
+        ? validateArgs[1]
+        : Path.ChangeExtension(binaryPath, null) + ".manifest.csv";
+
+    if (binaryPath is null || !File.Exists(binaryPath))
+    {
+        Console.WriteLine("No dump found. Run 'dump' against the radio first, or pass a .bin path explicitly.");
+        return 1;
+    }
+
+    Console.WriteLine($"Validating codecs against {binaryPath}");
+    var dump = DumpReader.Load(binaryPath, manifestPath);
+    var results = CodecValidator.Run(dump);
+
+    var failed = 0;
+    foreach (var r in results)
+    {
+        Console.WriteLine($"  [{(r.Passed ? "PASS" : "FAIL")}] {r.Name}: {r.Detail}");
+        if (!r.Passed) failed++;
+    }
+
+    Console.WriteLine($"{results.Count - failed}/{results.Count} checks passed.");
+    return failed == 0 ? 0 : 1;
+}
+
+static string? FindLatestDump()
+{
+    var dumpDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "dumps"));
+    if (!Directory.Exists(dumpDir)) return null;
+    return Directory.GetFiles(dumpDir, "*.bin").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
 }
 
 static int RunQuery(string[] queryArgs)
