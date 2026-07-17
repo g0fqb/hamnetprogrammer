@@ -1,5 +1,6 @@
 using System.IO.Ports;
 using HamNetProgrammer.Core.Data;
+using HamNetProgrammer.Core.Export;
 using HamNetProgrammer.Core.Import;
 using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
@@ -18,6 +19,12 @@ if (args.Length > 0 && args[0].Equals("build-grouplists", StringComparison.Ordin
 
 if (args.Length > 0 && args[0].Equals("build-roaming", StringComparison.OrdinalIgnoreCase))
     return RunBuildRoaming(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("export-json", StringComparison.OrdinalIgnoreCase))
+    return RunExportJson(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("preview", StringComparison.OrdinalIgnoreCase))
+    return RunPreview(args.Skip(1).ToArray());
 
 var positional = args.Where(a => !a.Equals("dump", StringComparison.OrdinalIgnoreCase)).ToArray();
 var runDump = args.Any(a => a.Equals("dump", StringComparison.OrdinalIgnoreCase));
@@ -214,6 +221,36 @@ static int RunBuildRoaming(string[] buildArgs)
         foreach (var w in result.Warnings) Console.WriteLine($"  {w}");
     }
 
+    return 0;
+}
+
+static int RunExportJson(string[] exportArgs)
+{
+    var dbPath = exportArgs.Length > 0
+        ? exportArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+    var outputPath = exportArgs.Length > 1
+        ? exportArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug_export.json"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    CodeplugJsonExporter.ExportToFile(db, outputPath);
+    Console.WriteLine($"Exported to {outputPath}");
+    return 0;
+}
+
+static int RunPreview(string[] previewArgs)
+{
+    var dbPath = previewArgs.Length > 0
+        ? previewArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+    var outputPath = previewArgs.Length > 1
+        ? previewArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug_preview.html"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    CodeplugPreviewBuilder.BuildToFile(db, outputPath);
+    Console.WriteLine($"Preview written to {outputPath}");
     return 0;
 }
 
