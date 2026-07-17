@@ -2,6 +2,7 @@ using System.IO.Ports;
 using HamNetProgrammer.Core.Data;
 using HamNetProgrammer.Core.Export;
 using HamNetProgrammer.Core.Import;
+using HamNetProgrammer.Core.Online;
 using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
 
@@ -34,6 +35,9 @@ if (args.Length > 0 && args[0].Equals("encode", StringComparison.OrdinalIgnoreCa
 
 if (args.Length > 0 && args[0].Equals("write-codeplug", StringComparison.OrdinalIgnoreCase))
     return RunWriteCodeplug(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("lookup-dmrid", StringComparison.OrdinalIgnoreCase))
+    return await RunLookupDmrId(args.Skip(1).ToArray());
 
 var peekAddressArg = args.FirstOrDefault(a => a.StartsWith("peek=", StringComparison.OrdinalIgnoreCase));
 var pokeArg = args.FirstOrDefault(a => a.StartsWith("poke=", StringComparison.OrdinalIgnoreCase));
@@ -157,6 +161,52 @@ static void RunFullDump(AnyToneD878Transport radio)
     Console.WriteLine($"Dump complete: {results.Count} regions, {totalBytes:N0} bytes, {failures} failure(s).");
     Console.WriteLine($"Binary: {binaryPath}");
     Console.WriteLine($"Manifest: {manifestPath}");
+}
+
+static async Task<int> RunLookupDmrId(string[] lookupArgs)
+{
+    if (lookupArgs.Length < 1)
+    {
+        Console.WriteLine("Usage: HamNetProgrammer.Cli lookup-dmrid <callsign> [dbPath]");
+        return 1;
+    }
+
+    var callsign = lookupArgs[0];
+    var dbPath = lookupArgs.Length > 1
+        ? lookupArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+    var cachePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "radioid_users.csv"));
+
+    if (!File.Exists(cachePath) || (DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath)).TotalDays > 7)
+    {
+        Console.WriteLine("Downloading radioid.net user database (~17MB, cached for 7 days)...");
+        await RadioIdLookup.DownloadToCacheAsync(cachePath);
+    }
+    else
+    {
+        Console.WriteLine($"Using cached database ({cachePath}, last updated {File.GetLastWriteTimeUtc(cachePath):yyyy-MM-dd}).");
+    }
+
+    var result = RadioIdLookup.FindByCallsign(cachePath, callsign);
+    if (result is null)
+    {
+        Console.WriteLine($"No entry found for callsign '{callsign}'.");
+        return 1;
+    }
+
+    Console.WriteLine($"Found: {result.Callsign} - DMR ID {result.DmrId} ({result.Name}, {result.Country})");
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    using var cmd = db.CreateCommand();
+    cmd.CommandText = "UPDATE RadioIds SET DmrId = $dmrId WHERE Callsign = $callsign;";
+    cmd.Parameters.AddWithValue("$dmrId", result.DmrId);
+    cmd.Parameters.AddWithValue("$callsign", result.Callsign);
+    var rowsUpdated = cmd.ExecuteNonQuery();
+    Console.WriteLine(rowsUpdated > 0
+        ? $"Updated {rowsUpdated} RadioIds row(s) in {dbPath}."
+        : $"No matching RadioIds row for '{callsign}' in {dbPath} - nothing updated.");
+
+    return 0;
 }
 
 static int RunWriteCodeplug(string[] writeArgs)
