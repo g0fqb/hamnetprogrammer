@@ -1,5 +1,23 @@
 using System.IO.Ports;
+using HamNetProgrammer.Core.Data;
+using HamNetProgrammer.Core.Import;
+using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
+
+if (args.Length > 0 && args[0].Equals("import", StringComparison.OrdinalIgnoreCase))
+    return RunImport(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("query", StringComparison.OrdinalIgnoreCase))
+    return RunQuery(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("build-scanlists", StringComparison.OrdinalIgnoreCase))
+    return RunBuildScanLists(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("build-grouplists", StringComparison.OrdinalIgnoreCase))
+    return RunBuildGroupLists(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("build-roaming", StringComparison.OrdinalIgnoreCase))
+    return RunBuildRoaming(args.Skip(1).ToArray());
 
 var positional = args.Where(a => !a.Equals("dump", StringComparison.OrdinalIgnoreCase)).ToArray();
 var runDump = args.Any(a => a.Equals("dump", StringComparison.OrdinalIgnoreCase));
@@ -102,4 +120,128 @@ static void RunFullDump(AnyToneD878Transport radio)
     Console.WriteLine($"Dump complete: {results.Count} regions, {totalBytes:N0} bytes, {failures} failure(s).");
     Console.WriteLine($"Binary: {binaryPath}");
     Console.WriteLine($"Manifest: {manifestPath}");
+}
+
+static int RunImport(string[] importArgs)
+{
+    if (importArgs.Length < 1)
+    {
+        Console.WriteLine("Usage: HamNetProgrammer.Cli import <csvPath> [dbPath]");
+        return 1;
+    }
+
+    var csvPath = importArgs[0];
+    var dbPath = importArgs.Length > 1
+        ? importArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+    Console.WriteLine($"Importing {csvPath} into {dbPath}");
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var result = RtSystemsChannelCsvImporter.Import(csvPath, db);
+
+    Console.WriteLine($"Channels imported: {result.ChannelsImported}");
+    Console.WriteLine($"Zones created: {result.ZonesCreated}");
+    Console.WriteLine($"Contacts (talkgroups) created: {result.ContactsCreated}");
+    Console.WriteLine($"Radio IDs created: {result.RadioIdsCreated}");
+    Console.WriteLine($"Scan lists created: {result.ScanListsCreated}");
+    Console.WriteLine($"Group lists created: {result.GroupListsCreated}");
+
+    if (result.Warnings.Count > 0)
+    {
+        Console.WriteLine($"Warnings ({result.Warnings.Count}):");
+        foreach (var w in result.Warnings) Console.WriteLine($"  {w}");
+    }
+
+    return 0;
+}
+
+static int RunBuildScanLists(string[] buildArgs)
+{
+    var dbPath = buildArgs.Length > 0
+        ? buildArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var result = ZoneScanListBuilder.BuildFromZones(db);
+
+    Console.WriteLine($"Zones processed: {result.ZonesProcessed}");
+    Console.WriteLine($"Channels linked to a zone scan list: {result.ChannelsLinked}");
+    if (result.Warnings.Count > 0)
+    {
+        Console.WriteLine($"Warnings ({result.Warnings.Count}):");
+        foreach (var w in result.Warnings) Console.WriteLine($"  {w}");
+    }
+
+    return 0;
+}
+
+static int RunBuildGroupLists(string[] buildArgs)
+{
+    var dbPath = buildArgs.Length > 0
+        ? buildArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var result = ZoneGroupListBuilder.BuildFromZones(db);
+
+    Console.WriteLine($"Zones processed: {result.ZonesProcessed}");
+    Console.WriteLine($"Channels linked to a zone group list: {result.ChannelsLinked}");
+    if (result.Warnings.Count > 0)
+    {
+        Console.WriteLine($"Warnings ({result.Warnings.Count}):");
+        foreach (var w in result.Warnings) Console.WriteLine($"  {w}");
+    }
+
+    return 0;
+}
+
+static int RunBuildRoaming(string[] buildArgs)
+{
+    var dbPath = buildArgs.Length > 0
+        ? buildArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var result = TalkGroupRoamingZoneBuilder.BuildFromZones(db);
+
+    Console.WriteLine($"Roaming zones created: {result.RoamingZonesProcessed}");
+    Console.WriteLine($"Channels linked into a roaming zone: {result.ChannelsLinked}");
+    if (result.Warnings.Count > 0)
+    {
+        Console.WriteLine($"Warnings ({result.Warnings.Count}):");
+        foreach (var w in result.Warnings) Console.WriteLine($"  {w}");
+    }
+
+    return 0;
+}
+
+static int RunQuery(string[] queryArgs)
+{
+    if (queryArgs.Length < 1)
+    {
+        Console.WriteLine("Usage: HamNetProgrammer.Cli query <sql> [dbPath]");
+        return 1;
+    }
+
+    var sql = queryArgs[0];
+    var dbPath = queryArgs.Length > 1
+        ? queryArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    using var cmd = db.CreateCommand();
+    cmd.CommandText = sql;
+    using var reader = cmd.ExecuteReader();
+
+    var columnNames = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+    Console.WriteLine(string.Join(" | ", columnNames));
+    while (reader.Read())
+    {
+        var values = Enumerable.Range(0, reader.FieldCount).Select(i => reader.IsDBNull(i) ? "" : reader.GetValue(i).ToString());
+        Console.WriteLine(string.Join(" | ", values));
+    }
+
+    return 0;
 }

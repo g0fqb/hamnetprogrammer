@@ -5,4 +5,5 @@ obj/
 *.db
 *.db-shm
 *.db-wal
-dumps/
+/dumps/
+/data/
