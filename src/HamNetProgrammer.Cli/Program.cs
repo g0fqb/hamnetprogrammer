@@ -32,6 +32,9 @@ if (args.Length > 0 && args[0].Equals("validate-codecs", StringComparison.Ordina
 if (args.Length > 0 && args[0].Equals("encode", StringComparison.OrdinalIgnoreCase))
     return RunEncode(args.Skip(1).ToArray());
 
+if (args.Length > 0 && args[0].Equals("write-codeplug", StringComparison.OrdinalIgnoreCase))
+    return RunWriteCodeplug(args.Skip(1).ToArray());
+
 var peekAddressArg = args.FirstOrDefault(a => a.StartsWith("peek=", StringComparison.OrdinalIgnoreCase));
 var pokeArg = args.FirstOrDefault(a => a.StartsWith("poke=", StringComparison.OrdinalIgnoreCase));
 var positional = args.Where(a =>
@@ -154,6 +157,53 @@ static void RunFullDump(AnyToneD878Transport radio)
     Console.WriteLine($"Dump complete: {results.Count} regions, {totalBytes:N0} bytes, {failures} failure(s).");
     Console.WriteLine($"Binary: {binaryPath}");
     Console.WriteLine($"Manifest: {manifestPath}");
+}
+
+static int RunWriteCodeplug(string[] writeArgs)
+{
+    if (writeArgs.Length < 1)
+    {
+        Console.WriteLine("Usage: HamNetProgrammer.Cli write-codeplug <port> [dbPath]");
+        return 1;
+    }
+
+    var portName = writeArgs[0];
+    var dbPath = writeArgs.Length > 1
+        ? writeArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var regions = AnyToneD878CodeplugEncoder.Build(db);
+    var totalBytes = regions.Sum(r => (long)r.Data.Length);
+    Console.WriteLine($"Encoded {regions.Count} regions, {totalBytes:N0} bytes to write.");
+
+    using var radio = new AnyToneD878Transport(portName);
+    try
+    {
+        Console.WriteLine($"Opening {portName}...");
+        radio.Open();
+
+        Console.WriteLine("Starting programming session (radio should show 'PC Mode')...");
+        radio.StartProgrammingSession();
+        Console.WriteLine($"Device identifier: {radio.ReadDeviceId()}");
+
+        var started = DateTime.Now;
+        AnyToneD878CodeplugWriter.Write(radio, regions, (region, index, total, written, totalW) =>
+        {
+            var elapsed = DateTime.Now - started;
+            Console.WriteLine($"  [{index}/{total}] {region.Name} done - {written:N0}/{totalW:N0} bytes, {elapsed.TotalSeconds:F0}s elapsed");
+        });
+
+        Console.WriteLine("Ending programming session (this commits the write - device will drop off USB and re-enumerate in ~10-15s)...");
+        radio.EndProgrammingSession();
+        Console.WriteLine("Done.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
 }
 
 static int RunImport(string[] importArgs)
