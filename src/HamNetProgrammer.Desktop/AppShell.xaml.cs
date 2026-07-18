@@ -47,7 +47,11 @@ public class AppShell : Window
         var menuItems = new List<NavigationViewItem>
         {
             CreateNavItem("Zones", Glyphs.IconZones, "zones"),
+            CreateNavItem("Scan Lists", Glyphs.IconScanLists, "scanlists"),
+            CreateNavItem("Group Lists", Glyphs.IconGroupLists, "grouplists"),
+            CreateNavItem("Roaming", Glyphs.IconRoaming, "roaming"),
             CreateNavItem("Radio", Glyphs.IconRadio, "radio"),
+            CreateNavItem("Settings", Glyphs.IconSettings, "settings"),
             CreateNavItem("Help", Glyphs.IconHelp, "help"),
         };
         foreach (var item in menuItems)
@@ -138,8 +142,20 @@ public class AppShell : Window
             case "zones":
                 _contentFrame.Navigate(typeof(ZonesPage));
                 break;
+            case "scanlists":
+                _contentFrame.Navigate(typeof(ScanListsPage));
+                break;
+            case "grouplists":
+                _contentFrame.Navigate(typeof(GroupListsPage));
+                break;
+            case "roaming":
+                _contentFrame.Navigate(typeof(RoamingZonesPage));
+                break;
             case "radio":
                 _contentFrame.Navigate(typeof(RadioPage));
+                break;
+            case "settings":
+                _contentFrame.Navigate(typeof(RadioSettingsPage));
                 break;
             case "help":
                 _contentFrame.Navigate(typeof(HelpPage));
