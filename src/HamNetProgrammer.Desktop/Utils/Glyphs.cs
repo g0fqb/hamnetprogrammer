@@ -17,6 +17,18 @@ public static class Glyphs
     public static string IconHelp => FromCodePoint(0xE897);
     public static string IconCheck => FromCodePoint(0xE73E);
     public static string IconWarning => FromCodePoint(0xE7BA);
+    public static string IconScanLists => FromCodePoint(0xE721);
+    public static string IconGroupLists => FromCodePoint(0xE77B);
+    public static string IconRoaming => FromCodePoint(0xE774);
+    public static string IconAdd => FromCodePoint(0xE710);
+    public static string IconRemove => FromCodePoint(0xE738);
+    public static string IconUp => FromCodePoint(0xE74A);
+    public static string IconDown => FromCodePoint(0xE74B);
+    public static string IconRename => FromCodePoint(0xE70F);
+    public static string IconRefresh => FromCodePoint(0xE72C);
+    public static string IconWrite => FromCodePoint(0xE898);
+    public static string IconSave => FromCodePoint(0xE74E);
+    public static string IconSettings => FromCodePoint(0xE713);
 
     public static string Heart => FromCodePoint(0x2665);
     public static string Antenna => FromCodePoint(0x1F4E1);
