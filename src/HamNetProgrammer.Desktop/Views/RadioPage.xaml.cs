@@ -17,6 +17,7 @@ public sealed partial class RadioPage : Page
 {
     private static readonly SolidColorBrush NotConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x5a, 0x65, 0x70));
     private static readonly SolidColorBrush ConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x4c, 0xaf, 0x50));
+    private static readonly SolidColorBrush SettlingBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0xff, 0xb7, 0x4d));
     private static readonly SolidColorBrush ErrorBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0xe9, 0x45, 0x60));
     private static readonly SolidColorBrush NeutralStatusBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x88, 0x96, 0xa0));
     private static readonly SolidColorBrush SuccessStatusBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x6b, 0xb0, 0xb8));
@@ -31,6 +32,9 @@ public sealed partial class RadioPage : Page
     // gating on port-selection alone would still show Write/Backup/Contribute as ready before
     // anything has actually confirmed a radio is there.
     private bool _connected;
+    // The most recent "Connected: ..." label, so WatchRadioSettleAsync can restore the exact same
+    // text once a radio reappears after resetting, without every caller having to pass it in.
+    private string? _lastConnectedLabel;
     private string? _lastDiagnosticsSession;
     private string? _lastWriteSessionFolder;
     private string? _lastWritePort;
@@ -136,6 +140,7 @@ public sealed partial class RadioPage : Page
     private void SetConnectionStatus(bool connected, string text)
     {
         _connected = connected;
+        if (connected) _lastConnectedLabel = text;
         UpdateButtonStates();
         _uiQueue.TryEnqueue(() =>
         {
@@ -143,6 +148,21 @@ public sealed partial class RadioPage : Page
             ConnectionStatusText.Text = text;
         });
         AppShell.ActiveInstance?.SetConnectionStatus(connected, text);
+    }
+
+    /// <summary>A radio has been confirmed, but the session that confirmed it just ended, so it's
+    /// mid drop-off/re-enumerate right now - genuinely neither "connected" nor "not connected".
+    /// Purely visual (amber, not green/grey) and deliberately doesn't touch _connected: a radio
+    /// resetting is not the same as a radio never having been confirmed, and buttons are already
+    /// disabled via _radioSettling regardless of this distinction.</summary>
+    private void SetSettlingStatus(string text)
+    {
+        _uiQueue.TryEnqueue(() =>
+        {
+            ConnectionDot.Fill = SettlingBrush;
+            ConnectionStatusText.Text = text;
+        });
+        AppShell.ActiveInstance?.SetSettlingStatus(text);
     }
 
     private static string DescribeDevice(string deviceId, string port) =>
@@ -188,6 +208,11 @@ public sealed partial class RadioPage : Page
         UpdateButtonStates();
         SetProgress(0, 1, "Radio is resetting after that session - waiting for it to come back...");
         Log($"Watching {port} for the radio to finish resetting before allowing another session...");
+        // The radio just confirmed itself moments ago, but that session ending means it's
+        // currently mid drop-off/re-enumerate at the USB level - showing green "Connected" through
+        // this window would be actively wrong, not just imprecise (confirmed directly: it used to
+        // sit there claiming "Connected" for the entire ~10-25s reset).
+        SetSettlingStatus($"Resetting {port} - waiting for it to come back...");
 
         var backAgain = await Task.Run(() => WaitForPortToReturn(port, TimeSpan.FromSeconds(30)));
 
@@ -198,6 +223,7 @@ public sealed partial class RadioPage : Page
         {
             Log("Radio is back and ready for another session.");
             SetComplete(true, "Radio ready.");
+            SetConnectionStatus(true, _lastConnectedLabel ?? DescribeDevice("unknown", port));
         }
         else
         {
@@ -270,7 +296,11 @@ public sealed partial class RadioPage : Page
         }
         else
         {
-            SetConnectionStatus(false, "Not connected.");
+            // Deliberately more specific than a bare "Not connected." here - that's the same text
+            // shown before any attempt was ever made, so a failed attempt would otherwise look
+            // visually identical to never having tried, on the one indicator most likely to
+            // actually be watched.
+            SetConnectionStatus(false, "Not connected - no radio found on any port.");
             SetComplete(false, "No radio found on any free port.");
             Log("No radio found on any free port.");
             SetBusy(false);
@@ -317,7 +347,10 @@ public sealed partial class RadioPage : Page
         else
         {
             Log($"Error: {result.Message}");
-            SetConnectionStatus(false, "Not connected.");
+            // Same reasoning as Auto-Detect's failure path - "Not connected." alone is identical
+            // to the pre-attempt idle text, so a failed test would show no visible change on the
+            // one indicator most likely to actually be watched.
+            SetConnectionStatus(false, $"Not connected - no radio responded on {port}.");
             SetComplete(false, $"Connection failed: {result.Message}");
             SetBusy(false);
         }

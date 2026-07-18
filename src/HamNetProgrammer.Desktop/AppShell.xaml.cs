@@ -12,6 +12,7 @@ public class AppShell : Window
 {
     private static readonly SolidColorBrush NotConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x5a, 0x65, 0x70));
     private static readonly SolidColorBrush ConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x4c, 0xaf, 0x50));
+    private static readonly SolidColorBrush SettlingBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0xff, 0xb7, 0x4d));
 
     private readonly Frame _contentFrame;
     private readonly NavigationView _navView;
@@ -135,6 +136,14 @@ public class AppShell : Window
     public void SetConnectionStatus(bool connected, string text) => _uiQueue.TryEnqueue(() =>
     {
         _connectionDot.Fill = connected ? ConnectedBrush : NotConnectedBrush;
+        _connectionStatusText.Text = text;
+    });
+
+    /// <summary>A radio was confirmed but is currently mid drop-off/re-enumerate after its session
+    /// ended - neither the green "connected" nor grey "not connected" state is accurate here.</summary>
+    public void SetSettlingStatus(string text) => _uiQueue.TryEnqueue(() =>
+    {
+        _connectionDot.Fill = SettlingBrush;
         _connectionStatusText.Text = text;
     });
 
