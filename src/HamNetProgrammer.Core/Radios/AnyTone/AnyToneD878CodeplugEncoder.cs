@@ -18,18 +18,26 @@ public static class AnyToneD878CodeplugEncoder
 {
     private const int ChannelsPerBank = 128;
 
-    public static List<EncodedRegion> Build(SqliteConnection db)
+    // TalkGroupRecordCodec's DMR ID field is 3-byte BCD (confirmed against real device dumps) -
+    // a hard hardware ceiling on this radio, not a project limitation. TGIF in particular hosts
+    // "personal reflector" talkgroups well past this (7-8 digit numbers; DMR's reserved "All
+    // Call" ID 16777215 is another), all legitimately real talkgroups elsewhere, just ones this
+    // specific radio's TalkGroupList format cannot represent at all - no CPS could write them
+    // here either.
+    private const long MaxTalkGroupDmrId = 999_999;
+
+    public static List<EncodedRegion> Build(SqliteConnection db, List<string>? warnings = null)
     {
         var regions = new List<EncodedRegion>();
 
         var (scanListsEnabled, groupListsEnabled, roamingEnabled) = ReadListFeatureFlags(db);
 
-        var contactIndex = BuildContactIndex(db);
+        var contactIndex = BuildContactIndex(db, warnings);
         var radioIdIndex = BuildRadioIdIndex(db);
         var scanListIndex = BuildScanListIndex(db);
         var groupListIndex = BuildGroupListIndex(db);
 
-        regions.AddRange(EncodeChannels(db, contactIndex, radioIdIndex, scanListIndex, groupListIndex, scanListsEnabled, groupListsEnabled));
+        regions.AddRange(EncodeChannels(db, contactIndex, radioIdIndex, scanListIndex, groupListIndex, scanListsEnabled, groupListsEnabled, warnings));
         regions.AddRange(EncodeZones(db));
         if (scanListsEnabled) regions.AddRange(EncodeScanLists(db));
         if (groupListsEnabled) regions.AddRange(EncodeGroupLists(db, contactIndex));
@@ -56,15 +64,27 @@ public static class AnyToneD878CodeplugEncoder
         return (reader.GetInt64(0) != 0, reader.GetInt64(1) != 0, reader.GetInt64(2) != 0);
     }
 
-    private static Dictionary<long, uint> BuildContactIndex(SqliteConnection db)
+    // Contacts whose DmrId won't fit the radio's 3-byte BCD talkgroup field are deliberately
+    // excluded here rather than included with a wrong/truncated number - any channel referencing
+    // one of these gets flagged in EncodeChannels instead of silently pointing at contact index 0
+    // (a real contact, not a "none" sentinel - ContactIndex has no such sentinel in this codec).
+    private static Dictionary<long, uint> BuildContactIndex(SqliteConnection db, List<string>? warnings)
     {
         var map = new Dictionary<long, uint>();
         using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT Id FROM Contacts ORDER BY Id;";
+        cmd.CommandText = "SELECT Id, Name, DmrId FROM Contacts ORDER BY Id;";
         using var reader = cmd.ExecuteReader();
-        uint i = 0;
+        uint i = 1; // 0 is reserved for NoContactIndex - real contacts start at 1.
         while (reader.Read())
-            map[reader.GetInt64(0)] = i++;
+        {
+            var id = reader.GetInt64(0);
+            if (!reader.IsDBNull(2) && reader.GetInt64(2) > MaxTalkGroupDmrId)
+            {
+                warnings?.Add($"Talkgroup '{reader.GetString(1)}' (DmrId {reader.GetInt64(2)}) exceeds this radio's 6-digit talkgroup limit and won't be written.");
+                continue;
+            }
+            map[id] = i++;
+        }
         return map;
     }
 
@@ -106,7 +126,15 @@ public static class AnyToneD878CodeplugEncoder
         return map;
     }
 
-    private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex, Dictionary<long, byte> groupListIndex, bool scanListsEnabled, bool groupListsEnabled)
+    // The "no contact" sentinel for ContactIndex is 0, not a made-up out-of-range value -
+    // confirmed against qdmr's own AnytoneCodeplug::ChannelElement::fromChannel (anytone_codeplug.cc:773,
+    // `setContactIndex(0)` when the channel has no contact), which qdmr uses across real,
+    // hardware-tested writes to this exact radio family. Whatever ends up encoded at contact
+    // index 0 in TalkGroupList is therefore never actually referenced by a "no contact" channel -
+    // the firmware treats index 0 itself as the sentinel, not as a real contact lookup.
+    private const uint NoContactIndex = 0;
+
+    private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex, Dictionary<long, byte> groupListIndex, bool scanListsEnabled, bool groupListsEnabled, List<string>? warnings)
     {
         var banks = new Dictionary<int, byte[]>();
         int BankLength(int bank) => bank == 31 ? 2176 : ChannelsPerBank * 64;
@@ -121,12 +149,23 @@ public static class AnyToneD878CodeplugEncoder
         while (reader.Read())
         {
             var channelNumber = reader.GetInt32(0);
+            var channelName = reader.GetString(1);
             var flatIndex = (uint)(channelNumber - 1);
             var bank = (int)(flatIndex / ChannelsPerBank);
             var slot = (int)(flatIndex % ChannelsPerBank);
 
             if (bank is < 0 or > 31)
                 throw new InvalidOperationException($"Channel {channelNumber} (flat index {flatIndex}) is out of the AT-D878UV's channel range.");
+
+            uint contactIdx = NoContactIndex;
+            if (!reader.IsDBNull(9))
+            {
+                var contactId = reader.GetInt64(9);
+                if (contactIndex.TryGetValue(contactId, out var found))
+                    contactIdx = found;
+                else
+                    warnings?.Add($"Channel '{channelName}' (channel {channelNumber}) references a talkgroup that can't be written to this radio (number too large) - its digital contact will be left unset.");
+            }
 
             var record = new ChannelRecord(
                 RxFrequencyHz: reader.GetInt64(3),
@@ -136,11 +175,11 @@ public static class AnyToneD878CodeplugEncoder
                 IsDigital: reader.GetString(2).Equals("Digital", StringComparison.OrdinalIgnoreCase),
                 ColorCode: reader.IsDBNull(7) ? (byte)1 : (byte)reader.GetInt32(7),
                 TimeSlot: reader.IsDBNull(8) ? (byte)1 : (byte)reader.GetInt32(8),
-                ContactIndex: reader.IsDBNull(9) ? 0 : contactIndex.GetValueOrDefault(reader.GetInt64(9)),
+                ContactIndex: contactIdx,
                 RadioIdIndex: reader.IsDBNull(10) ? (byte)0 : radioIdIndex.GetValueOrDefault(reader.GetInt64(10)),
                 ScanListIndex: !scanListsEnabled || reader.IsDBNull(11) ? null : scanListIndex.GetValueOrDefault(reader.GetInt64(11)),
                 GroupListIndex: !groupListsEnabled || reader.IsDBNull(12) ? null : groupListIndex.GetValueOrDefault(reader.GetInt64(12)),
-                Name: reader.GetString(1));
+                Name: channelName);
 
             if (!banks.TryGetValue(bank, out var buffer))
                 banks[bank] = buffer = new byte[BankLength(bank)];
@@ -585,7 +624,10 @@ public static class AnyToneD878CodeplugEncoder
 
     private static IEnumerable<EncodedRegion> EncodeTalkGroups(SqliteConnection db, Dictionary<long, uint> contactIndex)
     {
-        var contactCount = contactIndex.Count;
+        // +1 for the reserved index-0 slot (NoContactIndex in EncodeChannels) - real contacts
+        // occupy contactIndex.Count entries starting at index 1, so the buffer needs room for
+        // indices 0..contactIndex.Count inclusive.
+        var contactCount = contactIndex.Count + 1;
         // Only the used portion of the list is written - see the writer method's remarks for why.
         // Rounded up to a 16-byte boundary since writes must be in exactly-16-byte chunks; the
         // few trailing pad bytes beyond the last real record stay zero, which is harmless since
@@ -615,7 +657,11 @@ public static class AnyToneD878CodeplugEncoder
         while (reader.Read())
         {
             var id = reader.GetInt64(0);
-            var index = (int)contactIndex[id];
+            // Contacts excluded from contactIndex (DmrId too large for this radio's 3-byte BCD
+            // field - see BuildContactIndex) are skipped here too, rather than crashing on a
+            // missing key - already warned about in BuildContactIndex.
+            if (!contactIndex.TryGetValue(id, out var indexValue)) continue;
+            var index = (int)indexValue;
             var name = reader.GetString(1);
             // Contacts without a real DMR ID (non-numeric names like "PARROT") get a distinct
             // synthetic placeholder rather than all sharing 0 - the offset table below is keyed

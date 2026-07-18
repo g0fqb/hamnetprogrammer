@@ -230,9 +230,11 @@ static int RunWriteCodeplug(string[] writeArgs)
         : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
 
     using var db = CodeplugDatabase.OpenOrCreate(dbPath);
-    var regions = AnyToneD878CodeplugEncoder.Build(db);
+    var encodeWarnings = new List<string>();
+    var regions = AnyToneD878CodeplugEncoder.Build(db, encodeWarnings);
     var totalBytes = regions.Sum(r => (long)r.Data.Length);
     Console.WriteLine($"Encoded {regions.Count} regions, {totalBytes:N0} bytes to write.");
+    foreach (var warning in encodeWarnings) Console.WriteLine($"  Warning: {warning}");
 
     using var radio = new AnyToneD878Transport(portName);
     try
@@ -484,7 +486,9 @@ static int RunEncode(string[] encodeArgs)
     Directory.CreateDirectory(outputDir);
 
     using var db = CodeplugDatabase.OpenOrCreate(dbPath);
-    var regions = AnyToneD878CodeplugEncoder.Build(db);
+    var encodeWarnings = new List<string>();
+    var regions = AnyToneD878CodeplugEncoder.Build(db, encodeWarnings);
+    foreach (var warning in encodeWarnings) Console.WriteLine($"Warning: {warning}");
 
     var binaryPath = Path.Combine(outputDir, "codeplug_image.bin");
     var manifestPath = Path.Combine(outputDir, "codeplug_image.manifest.csv");

@@ -483,10 +483,16 @@ public sealed partial class RadioPage : Page
                     auditLog.LogNote($"{activeZones}/{totalZones} zones active.");
                 }
 
-                var regions = AnyToneD878CodeplugEncoder.Build(db);
+                var encodeWarnings = new List<string>();
+                var regions = AnyToneD878CodeplugEncoder.Build(db, encodeWarnings);
                 var totalBytes = regions.Sum(r => (long)r.Data.Length);
                 Log($"Encoded {regions.Count} regions, {totalBytes:N0} bytes to write.");
                 auditLog.LogNote($"Encoded {regions.Count} regions, {totalBytes} bytes.");
+                foreach (var warning in encodeWarnings)
+                {
+                    Log($"  Warning: {warning}");
+                    auditLog.LogNote($"Warning: {warning}");
+                }
 
                 using var writeRadio = new AnyToneD878Transport(port);
                 Log($"Opening {port}...");
