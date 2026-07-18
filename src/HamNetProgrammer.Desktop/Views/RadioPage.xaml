@@ -47,6 +47,15 @@
                 </StackPanel>
             </Border>
 
+            <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Diagnostic report" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                    <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                               Text="Every Write Codeplug run automatically saves a before/after memory backup and a log of every region written. If something looks wrong, send that report so it can be investigated - no need to attach anything yourself." />
+                    <Button x:Name="SendReportButton" Content="Send Diagnostic Report" Click="OnSendReportClicked" IsEnabled="False" />
+                </StackPanel>
+            </Border>
+
             <ProgressBar x:Name="OperationProgressBar" Minimum="0" Maximum="1" Value="0" Visibility="Collapsed" />
             <TextBlock x:Name="OperationStatusText" FontSize="12" Foreground="#6bb0b8" />
         </StackPanel>

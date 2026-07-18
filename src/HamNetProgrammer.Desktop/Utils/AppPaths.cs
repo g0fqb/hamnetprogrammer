@@ -9,4 +9,5 @@ public static class AppPaths
 
     public static string CodeplugDbPath => Path.Combine(RepoRoot, "data", "codeplug.db");
     public static string DumpsDirectory => Path.Combine(RepoRoot, "dumps");
+    public static string DiagnosticsDirectory => Path.Combine(RepoRoot, "diagnostics");
 }
