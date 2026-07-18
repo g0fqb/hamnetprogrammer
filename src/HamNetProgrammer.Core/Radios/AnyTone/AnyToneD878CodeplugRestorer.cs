@@ -101,6 +101,20 @@ public static class AnyToneD878CodeplugRestorer
         baseline.GetRegion("ZoneAChannel").CopyTo(buffer.AsSpan(AnyToneD878CodeplugEncoder.ZoneAChannelOffset));
         baseline.GetRegion("ZoneBChannel").CopyTo(buffer.AsSpan(AnyToneD878CodeplugEncoder.ZoneBChannelOffset));
 
+        // GPS/APRS RadioSettings fields share this same block (see AnyToneD878CodeplugEncoder.
+        // SharedBlockRegionPrefix's remarks) and get spliced into the SAME combined write, so the
+        // audit log only ever records one "ZoneChannelDefaults (read-modify-write)" entry
+        // regardless of whether that write also touched RadioSettings. Restoring these two full
+        // named baseline regions unconditionally (rather than trying to detect whether they were
+        // actually touched) is always correct: GpsEnabled is written on every codeplug write, so
+        // PowerOnAndOptionalSettings is always a real candidate, and restoring AprsGeneralSettings
+        // even when it wasn't written this time is a harmless no-op difference from restoring the
+        // exact pre-write state, not a wrong one.
+        if (baseline.HasRegion("PowerOnAndOptionalSettings"))
+            baseline.GetRegion("PowerOnAndOptionalSettings").CopyTo(buffer.AsSpan(0, 256));
+        if (baseline.HasRegion("AprsGeneralSettings"))
+            baseline.GetRegion("AprsGeneralSettings").CopyTo(buffer.AsSpan(0x1000, 256));
+
         WriteRegion(radio, address, buffer);
         return new RestoredRegion(ZoneChannelDefaultsRegionName, address, length, false, null);
     }

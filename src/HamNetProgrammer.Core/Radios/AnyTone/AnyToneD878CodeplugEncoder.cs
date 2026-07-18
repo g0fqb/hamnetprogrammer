@@ -34,6 +34,7 @@ public static class AnyToneD878CodeplugEncoder
         regions.AddRange(EncodeRoaming(db));
         regions.AddRange(EncodeTalkGroups(db, contactIndex));
         regions.AddRange(EncodeRadioIds(db, radioIdIndex));
+        regions.AddRange(EncodeRadioSettings(db));
 
         return regions;
     }
@@ -409,6 +410,133 @@ public static class AnyToneD878CodeplugEncoder
         while (reader.Read())
             map[reader.GetInt64(0)] = i++;
         return map;
+    }
+
+    // Marks a region as belonging inside the shared 0x02500000-0x02501900 flash block (see
+    // ZoneChannelDefaultsBlockAddress's remarks) - AnyToneD878CodeplugWriter pulls out every
+    // region whose name has this prefix and splices it into the same live-read/write-back buffer
+    // it already uses for Zone A/B Channel defaults, rather than writing any of them standalone.
+    public const string SharedBlockRegionPrefix = "RadioSettings.";
+
+    // Byte offsets confirmed against qdmr's d878uv_generalsettings.txt and d878uv_aprssetting.txt
+    // (struct layouts generated from the same C++ code qdmr uses to successfully program real
+    // AT-D878UV radios - a stronger source than anytone-flash-tools' hand-annotated hex dump for
+    // this particular section, whose row-header formatting doesn't parse unambiguously byte-by-
+    // byte). Both structs live inside the shared block already covered by
+    // ZoneChannelDefaultsBlockLength, so no new read-modify-write mechanism is needed - only new
+    // sub-ranges spliced into the existing one.
+    //
+    // Deliberately scoped to Digital APRS reporting via "DMR APRS System 0" (fields for systems
+    // 1-7, and the separate Analog/FM APRS fields, exist on the radio but aren't modeled in the
+    // RadioSettings schema - out of scope for a hotspot-focused first cut). GPS Mode (GPS/BDS/
+    // GPS+BDS), present in the RadioSettings schema, has no confirmed byte offset in either
+    // independent source checked for this model - likely a D578UV-only field - so it is
+    // deliberately never written here despite existing as a UI/database field.
+    private const int GpsEnabledOffset = 0x0028;
+    private const int AprsAutoTxIntervalOffset = 0x100B;
+    private const int AprsLocationOffset = 0x100D; // fixed flag, lat deg/min/sec/sign, lon deg/min/sec/sign (9 bytes)
+    private const int AprsDestCallOffset = 0x1016; // dest call (6) + dest SSID (1) + source call (6) + source SSID (1) = 14 bytes
+    private const int AprsPathOffset = 0x1024; // 20 bytes ASCII
+    private const int AprsReportChannelOffset = 0x1040; // uint16 LE, 0x0fa2 = "Selected" (current channel)
+    private const int AprsTalkGroupOffset = 0x1050; // 4-byte BCD DMR ID
+    private const int AprsCallTypeOffset = 0x1070; // 0=Private, 1=Group, 2=All
+    private const int AprsSlotOffset = 0x1079; // 0=Channel, 1=TS1, 2=TS2
+    private const ushort AprsReportChannelSelected = 0x0fa2;
+
+    private static IEnumerable<EncodedRegion> EncodeRadioSettings(SqliteConnection db)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT GpsEnabled, AprsReportType, AprsCallsign, AprsCallsignSsid, AprsDestCallsign, AprsDestSsid,
+                   AprsSignalPath, AprsAutoTxIntervalSeconds, AprsReportChannelId, AprsTalkGroupId, AprsCallType,
+                   AprsSlot, AprsFixedLocationBeacon, AprsLatitudeDegree, AprsLatitudeMinute, AprsLatitudeSign,
+                   AprsLongitudeDegree, AprsLongitudeMinute, AprsLongitudeSign
+            FROM RadioSettings WHERE Id = 1;
+            """;
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) yield break;
+
+        var gpsEnabled = !reader.IsDBNull(0) && reader.GetInt64(0) != 0;
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}GpsEnabled", 0x02500000u + GpsEnabledOffset, [(byte)(gpsEnabled ? 1 : 0)]);
+
+        var reportType = reader.IsDBNull(1) ? "Off" : reader.GetString(1);
+        if (reportType != "Digital") yield break; // Analog/Off deliberately not written - see remarks above.
+
+        var callsign = reader.IsDBNull(2) ? "" : reader.GetString(2);
+        var callsignSsid = reader.IsDBNull(3) ? (byte)0 : (byte)reader.GetInt64(3);
+        var destCallsign = reader.IsDBNull(4) ? "" : reader.GetString(4);
+        var destSsid = reader.IsDBNull(5) ? (byte)0 : (byte)reader.GetInt64(5);
+        var signalPath = reader.IsDBNull(6) ? "" : reader.GetString(6);
+        var autoTxSeconds = reader.IsDBNull(7) ? 0 : reader.GetInt64(7);
+        long? reportChannelId = reader.IsDBNull(8) ? null : reader.GetInt64(8);
+        long? talkGroupContactId = reader.IsDBNull(9) ? null : reader.GetInt64(9);
+        var callType = reader.IsDBNull(10) ? "Group" : reader.GetString(10);
+        int? slot = reader.IsDBNull(11) ? null : reader.GetInt32(11);
+        var fixedLocation = !reader.IsDBNull(12) && reader.GetInt64(12) != 0;
+        var latDegree = reader.IsDBNull(13) ? 0 : reader.GetInt64(13);
+        var latMinute = reader.IsDBNull(14) ? 0 : reader.GetInt64(14);
+        var latSign = reader.IsDBNull(15) ? "N" : reader.GetString(15);
+        var lonDegree = reader.IsDBNull(16) ? 0 : reader.GetInt64(16);
+        var lonMinute = reader.IsDBNull(17) ? 0 : reader.GetInt64(17);
+        var lonSign = reader.IsDBNull(18) ? "E" : reader.GetString(18);
+
+        if (talkGroupContactId is null)
+            yield break; // Nothing to report to - leave whatever's already on the radio untouched.
+
+        long? talkGroupDmrId;
+        using (var tgCmd = db.CreateCommand())
+        {
+            tgCmd.CommandText = "SELECT DmrId FROM Contacts WHERE Id = $id;";
+            tgCmd.Parameters.AddWithValue("$id", talkGroupContactId.Value);
+            var result = tgCmd.ExecuteScalar();
+            talkGroupDmrId = result is DBNull or null ? null : (long)result;
+        }
+        if (talkGroupDmrId is null)
+            yield break; // Talkgroup has no real DMR ID (e.g. a synthetic placeholder) - can't address it.
+
+        var identity = new byte[14];
+        AsciiFieldCodec.Encode(destCallsign, 6).CopyTo(identity, 0);
+        identity[6] = destSsid;
+        AsciiFieldCodec.Encode(callsign, 6).CopyTo(identity, 7);
+        identity[13] = callsignSsid;
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsIdentity", 0x02500000u + AprsDestCallOffset, identity);
+
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsPath", 0x02500000u + AprsPathOffset, AsciiFieldCodec.Encode(signalPath, 20));
+
+        var autoTxRaw = (byte)Math.Clamp(autoTxSeconds / 30, 0, 255);
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsAutoTxInterval", 0x02500000u + AprsAutoTxIntervalOffset, [autoTxRaw]);
+
+        var location = new byte[9];
+        location[0] = (byte)(fixedLocation ? 1 : 0);
+        location[1] = (byte)latDegree;
+        location[2] = (byte)latMinute;
+        location[3] = 0; // Latitude seconds - not modeled in the schema, defaults to 0.
+        location[4] = (byte)(latSign == "S" ? 1 : 0);
+        location[5] = (byte)lonDegree;
+        location[6] = (byte)lonMinute;
+        location[7] = 0; // Longitude seconds - not modeled in the schema, defaults to 0.
+        location[8] = (byte)(lonSign == "W" ? 1 : 0);
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsLocation", 0x02500000u + AprsLocationOffset, location);
+
+        ushort reportChannelRaw = AprsReportChannelSelected;
+        if (reportChannelId is not null)
+        {
+            using var chCmd = db.CreateCommand();
+            chCmd.CommandText = "SELECT ChannelNumber FROM Channels WHERE Id = $id;";
+            chCmd.Parameters.AddWithValue("$id", reportChannelId.Value);
+            if (chCmd.ExecuteScalar() is long channelNumber)
+                reportChannelRaw = (ushort)(channelNumber - 1);
+        }
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsReportChannel", 0x02500000u + AprsReportChannelOffset,
+            [(byte)reportChannelRaw, (byte)(reportChannelRaw >> 8)]);
+
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsTalkGroup", 0x02500000u + AprsTalkGroupOffset, BcdCodec.Encode(talkGroupDmrId.Value, 4));
+
+        byte callTypeRaw = callType switch { "Private" => 0, "All" => 2, _ => 1 };
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsCallType", 0x02500000u + AprsCallTypeOffset, [callTypeRaw]);
+
+        byte slotRaw = slot switch { 1 => 1, 2 => 2, _ => 0 };
+        yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsSlot", 0x02500000u + AprsSlotOffset, [slotRaw]);
     }
 
     private static IEnumerable<EncodedRegion> EncodeTalkGroups(SqliteConnection db, Dictionary<long, uint> contactIndex)

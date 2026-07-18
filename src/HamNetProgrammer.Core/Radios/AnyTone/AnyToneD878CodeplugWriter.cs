@@ -16,13 +16,19 @@ public static class AnyToneD878CodeplugWriter
     {
         var allRegions = regions.ToList();
 
-        // Zone A/B Channel defaults share a 256KB flash erase block with several settings sections
-        // this encoder doesn't otherwise touch (power-on message, APRS, DTMF list, etc.) - writing
-        // them as standalone regions would erase the whole block and silently wipe everything else
-        // sharing it. Read-modify-write the live block instead. See AnyToneD878CodeplugEncoder's
-        // remarks for the full story (this was found and fixed after it happened on real hardware).
-        if (allRegions.Any(r => r.Name == "Zones"))
-            allRegions.Add(BuildZoneChannelDefaultsRegion(radio));
+        // Zone A/B Channel defaults, and now the GPS/APRS RadioSettings fields, share a 256KB flash
+        // erase block with settings sections this encoder doesn't otherwise touch (power-on
+        // message, DTMF list, etc.) - writing any of them as standalone regions would erase the
+        // whole block and silently wipe everything else sharing it. Read-modify-write the live
+        // block instead, splicing in every region that belongs inside it. See
+        // AnyToneD878CodeplugEncoder's remarks for the full story (this was found and fixed after
+        // it happened on real hardware).
+        var sharedBlockSubRegions = allRegions.Where(r => r.Name.StartsWith(AnyToneD878CodeplugEncoder.SharedBlockRegionPrefix)).ToList();
+        if (allRegions.Any(r => r.Name == "Zones") || sharedBlockSubRegions.Count > 0)
+        {
+            allRegions.RemoveAll(r => sharedBlockSubRegions.Contains(r));
+            allRegions.Add(BuildZoneChannelDefaultsRegion(radio, sharedBlockSubRegions));
+        }
 
         // RoamingChannels/RoamingChannelsUsed/RoamingZonesUsed/RoamingZones share a different
         // 256KB erase block with a large undocumented tail - same failure mode as above, see
@@ -50,7 +56,7 @@ public static class AnyToneD878CodeplugWriter
         }
     }
 
-    private static EncodedRegion BuildZoneChannelDefaultsRegion(AnyToneD878Transport radio)
+    private static EncodedRegion BuildZoneChannelDefaultsRegion(AnyToneD878Transport radio, IReadOnlyList<EncodedRegion> sharedBlockSubRegions)
     {
         var address = AnyToneD878CodeplugEncoder.ZoneChannelDefaultsBlockAddress;
         var length = AnyToneD878CodeplugEncoder.ZoneChannelDefaultsBlockLength;
@@ -67,6 +73,14 @@ public static class AnyToneD878CodeplugWriter
         // Every zone defaults to its first channel (position 0) for both VFO A and B.
         Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneAChannelOffset, 512);
         Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneBChannelOffset, 512);
+
+        // GPS/APRS RadioSettings fields, if the encoder produced any this run - see
+        // AnyToneD878CodeplugEncoder.SharedBlockRegionPrefix's remarks.
+        foreach (var region in sharedBlockSubRegions)
+        {
+            var relativeOffset = (int)(region.Address - address);
+            region.Data.CopyTo(buffer, relativeOffset);
+        }
 
         return new EncodedRegion("ZoneChannelDefaults (read-modify-write)", address, buffer);
     }
