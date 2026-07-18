@@ -25,7 +25,8 @@
                 <ListView x:Name="GroupListListView" SelectionChanged="OnSelectionChanged" Padding="4">
                     <ListView.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding}" FontFamily="Consolas" Padding="8,6" />
+                            <TextBlock Text="{Binding}" FontFamily="Consolas" Padding="8,6"
+                                       TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding}" />
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
@@ -62,7 +63,8 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="{Binding Position}" FontFamily="Consolas" FontSize="12" Foreground="#8896a0" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea" />
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea"
+                                               TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
                                     <TextBlock Grid.Column="2" Text="{Binding CallType}" FontSize="12" Foreground="#8896a0" />
                                     <TextBlock Grid.Column="3" Text="{Binding DmrId}" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" />
                                 </Grid>

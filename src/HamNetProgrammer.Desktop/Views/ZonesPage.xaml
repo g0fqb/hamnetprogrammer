@@ -31,12 +31,17 @@
                     <ListView x:Name="ZoneListView" SelectionChanged="OnZoneSelectionChanged" Padding="4">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Orientation="Horizontal" Padding="4,4" Spacing="6">
-                                    <CheckBox IsChecked="{Binding IsActive}" Tag="{Binding Name}"
+                                <Grid Padding="4,4" ColumnSpacing="6" ToolTipService.ToolTip="{Binding Name}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox Grid.Column="0" IsChecked="{Binding IsActive}" Tag="{Binding Name}"
                                               Click="OnZoneActiveToggled"
                                               ToolTipService.ToolTip="Active zones are written to the radio; inactive ones are parked and skipped." />
-                                    <TextBlock Text="{Binding Name}" FontFamily="Consolas" VerticalAlignment="Center" />
-                                </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" FontFamily="Consolas" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" />
+                                </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
@@ -101,7 +106,8 @@
                                             <ColumnDefinition Width="190" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="{Binding Position}" FontFamily="Consolas" FontSize="12" Foreground="#8896a0" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea"
+                                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
                                         <TextBlock Grid.Column="2" Text="{Binding FrequencyMHz}" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" />
                                         <TextBlock Grid.Column="3" Text="{Binding TalkGroup}" FontSize="12" Foreground="#dce6ea" />
                                         <TextBlock Grid.Column="4" Text="{Binding ColorCodeSlot}" FontFamily="Consolas" FontSize="12" Foreground="#8896a0" />

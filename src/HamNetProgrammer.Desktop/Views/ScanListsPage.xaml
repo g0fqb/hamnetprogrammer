@@ -31,7 +31,8 @@
                     <ListView x:Name="ScanListListView" SelectionChanged="OnSelectionChanged" Padding="4">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding}" FontFamily="Consolas" Padding="8,6" />
+                                <TextBlock Text="{Binding}" FontFamily="Consolas" Padding="8,6"
+                                           TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding}" />
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
@@ -87,7 +88,8 @@
                                             <ColumnDefinition Width="140" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="{Binding Position}" FontFamily="Consolas" FontSize="12" Foreground="#8896a0" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea"
+                                                   TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
                                         <TextBlock Grid.Column="2" Text="{Binding FrequencyMHz}" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" />
                                         <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
                                             <Button Content="Up" FontSize="10" Padding="6,2" Tag="{Binding Position}" Click="OnMoveUpClicked" />

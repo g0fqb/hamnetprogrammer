@@ -62,7 +62,8 @@
                                     <ColumnDefinition Width="120" />
                                     <ColumnDefinition Width="140" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea" />
+                                <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea"
+                                           TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
                                 <TextBlock Grid.Column="1" Text="{Binding DmrIdDisplay}" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" />
                                 <TextBlock Grid.Column="2" Text="{Binding NetworkDisplay}" FontSize="12" Foreground="#8896a0" />
                             </Grid>
