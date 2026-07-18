@@ -20,6 +20,7 @@ public static class AnyToneD878CodeplugRestorer
 {
     private const string ZoneChannelDefaultsRegionName = "ZoneChannelDefaults (read-modify-write)";
     private const string RoamingBlockRegionName = "RoamingBlock (read-modify-write)";
+    private const string GeneralUsedBitmapsBlockRegionName = "GeneralUsedBitmapsBlock (read-modify-write)";
     private const int MaxReadChunkSize = 0xFF;
 
     public static List<RestoredRegion> Restore(
@@ -29,11 +30,12 @@ public static class AnyToneD878CodeplugRestorer
         Action<RestoredRegion, int, int>? onProgress = null)
     {
         var results = new List<RestoredRegion>();
-        var specialNames = new[] { ZoneChannelDefaultsRegionName, RoamingBlockRegionName };
+        var specialNames = new[] { ZoneChannelDefaultsRegionName, RoamingBlockRegionName, GeneralUsedBitmapsBlockRegionName };
         var plain = writtenRegions.Where(r => !specialNames.Contains(r.Name)).ToList();
         var total = plain.Count
             + (writtenRegions.Any(r => r.Name == ZoneChannelDefaultsRegionName) ? 1 : 0)
-            + (writtenRegions.Any(r => r.Name == RoamingBlockRegionName) ? 1 : 0);
+            + (writtenRegions.Any(r => r.Name == RoamingBlockRegionName) ? 1 : 0)
+            + (writtenRegions.Any(r => r.Name == GeneralUsedBitmapsBlockRegionName) ? 1 : 0);
         var done = 0;
 
         foreach (var (name, address, length) in plain)
@@ -69,7 +71,33 @@ public static class AnyToneD878CodeplugRestorer
         if (writtenRegions.Any(r => r.Name == RoamingBlockRegionName))
         {
             done++;
-            var result = RestoreRoamingBlock(radio, baseline);
+            var result = RestoreSplicedBlock(radio, baseline, RoamingBlockRegionName,
+                AnyToneD878CodeplugEncoder.RoamingBlockAddress, AnyToneD878CodeplugEncoder.RoamingBlockLength,
+                new (string, int)[]
+                {
+                    ("RoamingChannels", AnyToneD878CodeplugEncoder.RoamingChannelsOffset),
+                    ("RoamingChannelsUsed", AnyToneD878CodeplugEncoder.RoamingChannelsUsedOffset),
+                    ("RoamingZonesUsed", AnyToneD878CodeplugEncoder.RoamingZonesUsedOffset),
+                    ("RoamingZones", AnyToneD878CodeplugEncoder.RoamingZonesOffset),
+                });
+            results.Add(result);
+            onProgress?.Invoke(result, done, total);
+        }
+
+        if (writtenRegions.Any(r => r.Name == GeneralUsedBitmapsBlockRegionName))
+        {
+            done++;
+            // Offsets relative to GeneralUsedBitmapsBlockAddress (0x024C0000): ZonesUsed sits at
+            // 0x024c1300 (offset 0x1300), ScanListsUsed at 0x024c1340 (offset 0x1340),
+            // RadioIdListUsed at 0x024c1320 (offset 0x1320).
+            var result = RestoreSplicedBlock(radio, baseline, GeneralUsedBitmapsBlockRegionName,
+                AnyToneD878CodeplugEncoder.GeneralUsedBitmapsBlockAddress, AnyToneD878CodeplugEncoder.GeneralUsedBitmapsBlockLength,
+                new (string, int)[]
+                {
+                    ("ZonesUsed", 0x1300),
+                    ("RadioIdListUsed", 0x1320),
+                    ("ScanListsUsed", 0x1340),
+                });
             results.Add(result);
             onProgress?.Invoke(result, done, total);
         }
@@ -119,26 +147,18 @@ public static class AnyToneD878CodeplugRestorer
         return new RestoredRegion(ZoneChannelDefaultsRegionName, address, length, false, null);
     }
 
-    private static RestoredRegion RestoreRoamingBlock(AnyToneD878Transport radio, DumpReader baseline)
+    /// <summary>General remedy for any shared-erase-block region: read the block's LIVE current
+    /// content first (not baseline's stale copy of the whole block, so anything else sharing this
+    /// erase block that changed for a legitimate reason since the backup is preserved), splice in
+    /// only the named baseline sub-regions at their given offsets, write the whole block back in
+    /// one session.</summary>
+    private static RestoredRegion RestoreSplicedBlock(AnyToneD878Transport radio, DumpReader baseline,
+        string regionName, uint address, int length, IReadOnlyList<(string Name, int Offset)> subRegions)
     {
-        var address = AnyToneD878CodeplugEncoder.RoamingBlockAddress;
-        var length = AnyToneD878CodeplugEncoder.RoamingBlockLength;
-
-        var subRegions = new (string Name, int Offset)[]
-        {
-            ("RoamingChannels", AnyToneD878CodeplugEncoder.RoamingChannelsOffset),
-            ("RoamingChannelsUsed", AnyToneD878CodeplugEncoder.RoamingChannelsUsedOffset),
-            ("RoamingZonesUsed", AnyToneD878CodeplugEncoder.RoamingZonesUsedOffset),
-            ("RoamingZones", AnyToneD878CodeplugEncoder.RoamingZonesOffset),
-        };
-
         var missing = subRegions.Where(r => !baseline.HasRegion(r.Name)).Select(r => r.Name).ToList();
         if (missing.Count > 0)
-            return new RestoredRegion(RoamingBlockRegionName, address, length, true, $"No baseline data for {string.Join(", ", missing)}.");
+            return new RestoredRegion(regionName, address, length, true, $"No baseline data for {string.Join(", ", missing)}.");
 
-        // Same pattern as ZoneChannelDefaults: read the block's LIVE current content first, so
-        // anything else sharing this erase block that changed for a legitimate reason since the
-        // backup is preserved. Only the four known sub-ranges get overwritten.
         var buffer = new byte[length];
         var offset = 0;
         while (offset < length)
@@ -152,7 +172,7 @@ public static class AnyToneD878CodeplugRestorer
             baseline.GetRegion(name).CopyTo(buffer.AsSpan(relativeOffset));
 
         WriteRegion(radio, address, buffer);
-        return new RestoredRegion(RoamingBlockRegionName, address, length, false, null);
+        return new RestoredRegion(regionName, address, length, false, null);
     }
 
     private static void WriteRegion(AnyToneD878Transport radio, uint address, byte[] data)

@@ -16,6 +16,15 @@ public static class AnyToneD878CodeplugWriter
     {
         var allRegions = regions.ToList();
 
+        // Number of zones actually being written this session, from the ZonesUsed bitmap (0-based
+        // contiguous from index 0 - see AnyToneD878CodeplugEncoder.EncodeZones). Used below to keep
+        // the "current zone" pointer bytes from ever going stale/out-of-range.
+        var zoneCount = 0;
+        var zonesUsedForCount = allRegions.FirstOrDefault(r => r.Name == "ZonesUsed");
+        if (zonesUsedForCount is not null)
+            foreach (var b in zonesUsedForCount.Data)
+                zoneCount += System.Numerics.BitOperations.PopCount(b);
+
         // Zone A/B Channel defaults, and now the GPS/APRS RadioSettings fields, share a 256KB flash
         // erase block with settings sections this encoder doesn't otherwise touch (power-on
         // message, DTMF list, etc.) - writing any of them as standalone regions would erase the
@@ -27,7 +36,7 @@ public static class AnyToneD878CodeplugWriter
         if (allRegions.Any(r => r.Name == "Zones") || sharedBlockSubRegions.Count > 0)
         {
             allRegions.RemoveAll(r => sharedBlockSubRegions.Contains(r));
-            allRegions.Add(BuildZoneChannelDefaultsRegion(radio, sharedBlockSubRegions));
+            allRegions.Add(BuildZoneChannelDefaultsRegion(radio, sharedBlockSubRegions, zoneCount));
         }
 
         // RoamingChannels/RoamingChannelsUsed/RoamingZonesUsed/RoamingZones share a different
@@ -38,7 +47,26 @@ public static class AnyToneD878CodeplugWriter
         if (roamingSubRegions.Count > 0)
         {
             allRegions.RemoveAll(r => roamingSubRegions.Contains(r));
-            allRegions.Add(BuildRoamingBlockRegion(radio, roamingSubRegions));
+            allRegions.Add(BuildSplicedBlockRegion(radio, "RoamingBlock (read-modify-write)",
+                AnyToneD878CodeplugEncoder.RoamingBlockAddress, AnyToneD878CodeplugEncoder.RoamingBlockLength, roamingSubRegions));
+        }
+
+        // ZonesUsed/ScanListsUsed/RadioIdListUsed share a THIRD 256KB erase block
+        // (0x024C0000-0x024FFFFF, alongside FiveTone/TwoTone/Alarm/Encryption/AutoRepeater data
+        // this encoder never writes) - found the hard way on real hardware (2026-07-18): writing
+        // these three as standalone regions, even within one session, does NOT merge safely -
+        // each later write re-erased the block and silently wiped the earlier ones back to 0xFF,
+        // contradicting the "erase happens once per session" assumption this project had been
+        // operating on since the original 2026-07-17 incident. Only RadioIdListUsed (written last
+        // in Build()'s call order) ever survived; ZonesUsed and ScanListsUsed did not, for every
+        // write-codeplug run from 2026-07-17 onward until this fix. Same remedy as the other two
+        // shared blocks: splice into one live-read/write-back instead of three standalone writes.
+        var usedBitmapSubRegions = allRegions.Where(r => AnyToneD878CodeplugEncoder.GeneralUsedBitmapsBlockRegionNames.Contains(r.Name)).ToList();
+        if (usedBitmapSubRegions.Count > 0)
+        {
+            allRegions.RemoveAll(r => usedBitmapSubRegions.Contains(r));
+            allRegions.Add(BuildSplicedBlockRegion(radio, "GeneralUsedBitmapsBlock (read-modify-write)",
+                AnyToneD878CodeplugEncoder.GeneralUsedBitmapsBlockAddress, AnyToneD878CodeplugEncoder.GeneralUsedBitmapsBlockLength, usedBitmapSubRegions));
         }
 
         var totalBytes = allRegions.Sum(r => (long)r.Data.Length);
@@ -56,7 +84,7 @@ public static class AnyToneD878CodeplugWriter
         }
     }
 
-    private static EncodedRegion BuildZoneChannelDefaultsRegion(AnyToneD878Transport radio, IReadOnlyList<EncodedRegion> sharedBlockSubRegions)
+    private static EncodedRegion BuildZoneChannelDefaultsRegion(AnyToneD878Transport radio, IReadOnlyList<EncodedRegion> sharedBlockSubRegions, int zoneCount)
     {
         var address = AnyToneD878CodeplugEncoder.ZoneChannelDefaultsBlockAddress;
         var length = AnyToneD878CodeplugEncoder.ZoneChannelDefaultsBlockLength;
@@ -74,6 +102,22 @@ public static class AnyToneD878CodeplugWriter
         Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneAChannelOffset, 512);
         Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneBChannelOffset, 512);
 
+        // Defense in depth, not the confirmed fix (see AnyToneD878CodeplugEncoder.
+        // GeneralUsedBitmapsBlockAddress's remarks for that): if the live "current zone" pointer
+        // for VFO A/B is stale from before this write shrank the zone count - or simply out of
+        // range for any other reason - reset it to zone 0 rather than leave it pointing past the
+        // end of the list. Observed once with the pointer sitting at exactly the last valid index
+        // right before the AT-D878UV's zone-scroll rocker switch stopped responding; the actual
+        // root cause traced to a different bug, but a stale out-of-range pointer here is never
+        // correct regardless, so it's worth normalizing on every write.
+        if (zoneCount > 0)
+        {
+            if (buffer[AnyToneD878CodeplugEncoder.WorkModeZoneAIndexOffset] >= zoneCount)
+                buffer[AnyToneD878CodeplugEncoder.WorkModeZoneAIndexOffset] = 0;
+            if (buffer[AnyToneD878CodeplugEncoder.WorkModeZoneBIndexOffset] >= zoneCount)
+                buffer[AnyToneD878CodeplugEncoder.WorkModeZoneBIndexOffset] = 0;
+        }
+
         // GPS/APRS RadioSettings fields, if the encoder produced any this run - see
         // AnyToneD878CodeplugEncoder.SharedBlockRegionPrefix's remarks.
         foreach (var region in sharedBlockSubRegions)
@@ -85,10 +129,12 @@ public static class AnyToneD878CodeplugWriter
         return new EncodedRegion("ZoneChannelDefaults (read-modify-write)", address, buffer);
     }
 
-    private static EncodedRegion BuildRoamingBlockRegion(AnyToneD878Transport radio, IReadOnlyList<EncodedRegion> subRegions)
+    /// <summary>Reads an entire shared erase block live from the radio, splices the given
+    /// sub-regions into it at their correct relative offsets, and returns the merged whole-block
+    /// region ready to write back in one piece - the general remedy for "these regions share a
+    /// 256KB flash erase block and can't be written standalone or separately."</summary>
+    private static EncodedRegion BuildSplicedBlockRegion(AnyToneD878Transport radio, string regionName, uint blockAddress, int blockLength, IReadOnlyList<EncodedRegion> subRegions)
     {
-        var blockAddress = AnyToneD878CodeplugEncoder.RoamingBlockAddress;
-        var blockLength = AnyToneD878CodeplugEncoder.RoamingBlockLength;
         var buffer = new byte[blockLength];
 
         var offset = 0;
@@ -105,6 +151,6 @@ public static class AnyToneD878CodeplugWriter
             region.Data.CopyTo(buffer, relativeOffset);
         }
 
-        return new EncodedRegion("RoamingBlock (read-modify-write)", blockAddress, buffer);
+        return new EncodedRegion(regionName, blockAddress, buffer);
     }
 }

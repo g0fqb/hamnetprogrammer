@@ -160,6 +160,16 @@ public static class AnyToneD878CodeplugEncoder
     public const int ZoneAChannelOffset = 0x0100;
     public const int ZoneBChannelOffset = 0x0300;
 
+    // "Work mode MEM zone A/B index" per qdmr's d878uv_generalsettings.txt - the currently
+    // selected zone for VFO A/B. Confirmed via real-hardware dump diff (2026-07-18): this was the
+    // only byte that changed inside PowerOnAndOptionalSettings across an RT Systems write that
+    // fixed a non-responsive zone-scroll rocker switch, sitting at exactly the last valid zone
+    // index beforehand. The actual root cause traced to a different bug (see
+    // GeneralUsedBitmapsBlockAddress's remarks), but this encoder never explicitly sets this byte
+    // either way - the writer only clamps it if it's gone stale/out-of-range, as defense in depth.
+    public const int WorkModeZoneAIndexOffset = 0x001F;
+    public const int WorkModeZoneBIndexOffset = 0x0020;
+
     private static IEnumerable<EncodedRegion> EncodeZones(SqliteConnection db)
     {
         var zonesBuffer = new byte[ZoneRecordCodec.MaxMembers > 0 ? 250 * 512 : 0];
@@ -326,6 +336,23 @@ public static class AnyToneD878CodeplugEncoder
     public const int RoamingChannelsUsedOffset = 0x2000;
     public const int RoamingZonesUsedOffset = 0x2080;
     public const int RoamingZonesOffset = 0x3000;
+
+    // ZonesUsed (0x024c1300), ScanListsUsed (0x024c1340), and RadioIdListUsed (0x024c1320) all
+    // live inside a THIRD shared 256KB flash erase block (0x024C0000-0x024FFFFF), alongside
+    // FiveTone/TwoTone/Alarm/Encryption/AutoRepeater data this encoder never writes. Discovered
+    // the hard way on real hardware (2026-07-18) via a corruption symptom (the AT-D878UV's
+    // zone-scroll rocker switch stopped working) that had nothing obviously to do with these
+    // regions: comparing memory dumps bracketing every write-codeplug run since 2026-07-17 showed
+    // ZonesUsed and ScanListsUsed sitting at all-0xFF (erased) the entire time, while
+    // RadioIdListUsed - written LAST in Build()'s call order - stayed correct. This means writing
+    // multiple standalone regions into the SAME shared block, even within one session, does NOT
+    // merge safely as previously assumed (see ZoneChannelDefaultsBlockAddress's remarks) - each
+    // later write silently re-erased the block and wiped the earlier ones. Same remedy as the
+    // other two shared blocks: splice into one live-read/write-back instead of three standalone
+    // writes.
+    public const uint GeneralUsedBitmapsBlockAddress = 0x024C0000;
+    public const int GeneralUsedBitmapsBlockLength = 0x40000;
+    public static readonly string[] GeneralUsedBitmapsBlockRegionNames = ["ZonesUsed", "ScanListsUsed", "RadioIdListUsed"];
 
     private static IEnumerable<EncodedRegion> EncodeRoaming(SqliteConnection db)
     {
