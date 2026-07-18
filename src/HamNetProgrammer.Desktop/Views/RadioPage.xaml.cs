@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using HamNetProgrammer.Core.Data;
 using HamNetProgrammer.Core.Diagnostics;
+using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
 using HamNetProgrammer.Desktop.Utils;
 
@@ -276,6 +277,29 @@ public sealed partial class RadioPage : Page
                 }
 
                 using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+
+                using (var syncCheckCmd = db.CreateCommand())
+                {
+                    syncCheckCmd.CommandText = "SELECT SyncListsWithZones FROM RadioSettings WHERE Id = 1;";
+                    if (Convert.ToInt64(syncCheckCmd.ExecuteScalar() ?? 1L) != 0)
+                    {
+                        Log("Syncing Scan/Group/Roaming Lists with current zone membership...");
+                        var scanResult = ZoneScanListBuilder.BuildFromZones(db);
+                        var groupResult = ZoneGroupListBuilder.BuildFromZones(db);
+                        var roamResult = TalkGroupRoamingZoneBuilder.BuildFromZones(db);
+                        Log($"  Scan Lists: {scanResult.ZonesProcessed} zones, {scanResult.ChannelsLinked} channels linked.");
+                        Log($"  Group Lists: {groupResult.ZonesProcessed} zones, {groupResult.ChannelsLinked} channels linked.");
+                        Log($"  Roaming Zones: {roamResult.RoamingZonesProcessed} talkgroups, {roamResult.ChannelsLinked} channels linked.");
+                        foreach (var warning in scanResult.Warnings.Concat(groupResult.Warnings).Concat(roamResult.Warnings))
+                            Log($"  Warning: {warning}");
+                        auditLog.LogNote($"Synced lists with zones: {scanResult.ZonesProcessed} scan, {groupResult.ZonesProcessed} group, {roamResult.RoamingZonesProcessed} roaming.");
+                    }
+                    else
+                    {
+                        Log("List sync with zones is turned off - Scan/Group/Roaming Lists written as-is.");
+                        auditLog.LogNote("List sync with zones is off.");
+                    }
+                }
 
                 using (var zoneCountCmd = db.CreateCommand())
                 {
