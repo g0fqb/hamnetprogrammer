@@ -95,9 +95,28 @@ public class AppShell : Window
             VerticalAlignment = VerticalAlignment.Center,
             Text = "Not connected.",
         };
-        var statusBarContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        statusBarContent.Children.Add(_connectionDot);
-        statusBarContent.Children.Add(_connectionStatusText);
+        var statusBarContent = new Grid();
+        var leftPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        leftPanel.Children.Add(_connectionDot);
+        leftPanel.Children.Add(_connectionStatusText);
+        statusBarContent.Children.Add(leftPanel);
+
+        // Answers "am I running the build I think I am" without having to check file timestamps -
+        // shows the app's own version plus when THIS running instance's assembly was actually
+        // compiled, so a stale shortcut (or a rebuild you haven't relaunched into yet) is obvious
+        // at a glance rather than something to guess at.
+        var version = typeof(AppShell).Assembly.GetName().Version?.ToString(3) ?? "dev";
+        var builtAt = System.IO.File.GetLastWriteTime(typeof(AppShell).Assembly.Location);
+        var versionText = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x5a, 0x65, 0x70)),
+            FontFamily = new FontFamily("Consolas"),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Text = $"v{version} - built {builtAt:yyyy-MM-dd HH:mm}",
+        };
+        statusBarContent.Children.Add(versionText);
+
         var statusBar = new Border
         {
             Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x1a, 0x23, 0x2c)),
