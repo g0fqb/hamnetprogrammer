@@ -5,6 +5,8 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using HamNetProgrammer.Desktop.Utils;
 using Windows.Graphics;
+using Microsoft.UI.Xaml.Media.Imaging;
+using System.IO;
 
 namespace HamNetProgrammer.Desktop;
 
@@ -62,14 +64,18 @@ public sealed class SplashWindow : Window
             }
         };
 
-        var mark = new TextBlock
+        var logoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Logo", "hnp_logo.png");
+        var mark = new Image
         {
-            Text = "\U0001F4E1",
-            FontSize = 72,
+            Width = 160,
+            Height = 160,
+            Stretch = Stretch.Uniform,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(0, 24, 0, 8),
         };
+        if (File.Exists(logoPath))
+            mark.Source = new BitmapImage(new Uri(logoPath));
         Grid.SetRow(mark, 0);
 
         var title = new TextBlock

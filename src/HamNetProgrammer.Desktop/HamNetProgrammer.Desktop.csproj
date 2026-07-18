@@ -6,6 +6,7 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>HamNetProgrammer.Desktop</RootNamespace>
     <ApplicationTitle>HamNetProgrammer</ApplicationTitle>
+    <ApplicationIcon>Assets\Logo\hnp_logo.ico</ApplicationIcon>
     <ApplicationId>io.hamnetprogrammer.app</ApplicationId>
     <ApplicationIdGuid>B2C3D4E5-F6A7-8901-BCDE-F12345678901</ApplicationIdGuid>
     <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
