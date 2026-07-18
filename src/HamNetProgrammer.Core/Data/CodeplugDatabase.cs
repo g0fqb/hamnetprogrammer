@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 
 namespace HamNetProgrammer.Core.Data;
@@ -20,9 +21,20 @@ public static class CodeplugDatabase
             Name TEXT NOT NULL UNIQUE
         );
 
+        -- Priority/timing/revert fields per the AT-D878UV scan list record layout (confirmed against
+        -- both anytone-flash-tools and qdmr's independent reverse-engineering - see
+        -- Radios/AnyTone/Codecs/ScanListRecordCodec.cs). All nullable: NULL means "off"/device default
+        -- (Priority channels off, Look Back 0.5s, Dropout/Dwell 0.1s, Revert = Selected).
         CREATE TABLE IF NOT EXISTS ScanLists (
             Id INTEGER PRIMARY KEY,
-            Name TEXT NOT NULL UNIQUE
+            Name TEXT NOT NULL UNIQUE,
+            PriorityChannel1Id INTEGER NULL REFERENCES Channels(Id),
+            PriorityChannel2Id INTEGER NULL REFERENCES Channels(Id),
+            LookBackTimeA REAL NULL,
+            LookBackTimeB REAL NULL,
+            DropoutDelayTime REAL NULL,
+            DwellTime REAL NULL,
+            RevertMode TEXT NULL
         );
 
         CREATE TABLE IF NOT EXISTS GroupLists (
@@ -110,7 +122,53 @@ public static class CodeplugDatabase
         -- picker) once a full talkgroup database is imported into Contacts.
         CREATE INDEX IF NOT EXISTS IX_Contacts_Name ON Contacts(Name);
         CREATE INDEX IF NOT EXISTS IX_Contacts_DmrId ON Contacts(DmrId);
+
+        -- Radio-wide settings (not per-channel/zone) - GPS and APRS for now, more sections planned.
+        -- Single row (Id always 1). Database-only for now: the AT-D878UV's documented byte layout
+        -- for this region is ambiguous in places and shares a flash erase block with data involved
+        -- in a past incident (see project notes) - not wired into the radio write path until the
+        -- exact offsets are hardware-verified.
+        CREATE TABLE IF NOT EXISTS RadioSettings (
+            Id INTEGER PRIMARY KEY CHECK (Id = 1),
+            GpsEnabled INTEGER NULL,
+            GpsMode TEXT NULL,
+            AprsReportType TEXT NULL,
+            AprsCallsign TEXT NULL,
+            AprsCallsignSsid INTEGER NULL,
+            AprsDestCallsign TEXT NULL,
+            AprsDestSsid INTEGER NULL,
+            AprsSignalPath TEXT NULL,
+            AprsAutoTxIntervalSeconds INTEGER NULL,
+            AprsReportChannelId INTEGER NULL REFERENCES Channels(Id),
+            AprsTalkGroupId INTEGER NULL REFERENCES Contacts(Id),
+            AprsCallType TEXT NULL,
+            AprsSlot INTEGER NULL,
+            AprsFixedLocationBeacon INTEGER NULL,
+            AprsLatitudeDegree INTEGER NULL,
+            AprsLatitudeMinute INTEGER NULL,
+            AprsLatitudeSign TEXT NULL,
+            AprsLongitudeDegree INTEGER NULL,
+            AprsLongitudeMinute INTEGER NULL,
+            AprsLongitudeSign TEXT NULL,
+            AprsSendingText TEXT NULL,
+            GpsTemplateText TEXT NULL
+        );
+        INSERT OR IGNORE INTO RadioSettings (Id) VALUES (1);
         """;
+
+    // Columns added to ScanLists after its initial release - CREATE TABLE IF NOT EXISTS won't add
+    // these to a database that already has the table, so existing databases (like the working
+    // codeplug.db) need an explicit, idempotent ADD COLUMN pass.
+    private static readonly (string Column, string Definition)[] ScanListMigrationColumns =
+    [
+        ("PriorityChannel1Id", "INTEGER NULL REFERENCES Channels(Id)"),
+        ("PriorityChannel2Id", "INTEGER NULL REFERENCES Channels(Id)"),
+        ("LookBackTimeA", "REAL NULL"),
+        ("LookBackTimeB", "REAL NULL"),
+        ("DropoutDelayTime", "REAL NULL"),
+        ("DwellTime", "REAL NULL"),
+        ("RevertMode", "TEXT NULL"),
+    ];
 
     public static SqliteConnection OpenOrCreate(string path)
     {
@@ -121,6 +179,27 @@ public static class CodeplugDatabase
             cmd.CommandText = Schema;
             cmd.ExecuteNonQuery();
         }
+        MigrateScanListColumns(connection);
         return connection;
+    }
+
+    private static void MigrateScanListColumns(SqliteConnection connection)
+    {
+        var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var pragmaCmd = connection.CreateCommand())
+        {
+            pragmaCmd.CommandText = "PRAGMA table_info(ScanLists);";
+            using var reader = pragmaCmd.ExecuteReader();
+            while (reader.Read())
+                existingColumns.Add(reader.GetString(1));
+        }
+
+        foreach (var (column, definition) in ScanListMigrationColumns)
+        {
+            if (existingColumns.Contains(column)) continue;
+            using var alterCmd = connection.CreateCommand();
+            alterCmd.CommandText = $"ALTER TABLE ScanLists ADD COLUMN {column} {definition};";
+            alterCmd.ExecuteNonQuery();
+        }
     }
 }

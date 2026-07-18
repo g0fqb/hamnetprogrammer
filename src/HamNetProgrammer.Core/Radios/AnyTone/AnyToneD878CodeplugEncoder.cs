@@ -195,7 +195,15 @@ public static class AnyToneD878CodeplugEncoder
         var scanListRegions = new List<EncodedRegion>();
 
         using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT Id, Name FROM ScanLists ORDER BY Id;";
+        cmd.CommandText = """
+            SELECT sl.Id, sl.Name,
+                   p1.ChannelNumber, p2.ChannelNumber,
+                   sl.LookBackTimeA, sl.LookBackTimeB, sl.DropoutDelayTime, sl.DwellTime, sl.RevertMode
+            FROM ScanLists sl
+            LEFT JOIN Channels p1 ON p1.Id = sl.PriorityChannel1Id
+            LEFT JOIN Channels p2 ON p2.Id = sl.PriorityChannel2Id
+            ORDER BY sl.Id;
+            """;
         using var reader = cmd.ExecuteReader();
 
         var index = 0;
@@ -203,6 +211,15 @@ public static class AnyToneD878CodeplugEncoder
         {
             var scanListId = reader.GetInt64(0);
             var name = reader.GetString(1);
+            uint? priority1 = reader.IsDBNull(2) ? null : (uint)(reader.GetInt32(2) - 1);
+            uint? priority2 = reader.IsDBNull(3) ? null : (uint)(reader.GetInt32(3) - 1);
+            var lookBackA = reader.IsDBNull(4) ? 0.5 : reader.GetDouble(4);
+            var lookBackB = reader.IsDBNull(5) ? 0.5 : reader.GetDouble(5);
+            var dropout = reader.IsDBNull(6) ? 0.1 : reader.GetDouble(6);
+            var dwell = reader.IsDBNull(7) ? 0.1 : reader.GetDouble(7);
+            var revertMode = reader.IsDBNull(8) || !Enum.TryParse<ScanListRevertMode>(reader.GetString(8), out var parsedRevert)
+                ? ScanListRevertMode.Selected
+                : parsedRevert;
 
             using var membersCmd = db.CreateCommand();
             membersCmd.CommandText = """
@@ -219,7 +236,8 @@ public static class AnyToneD878CodeplugEncoder
                 members.Add((uint)(membersReader.GetInt32(0) - 1));
 
             var address = ScanListAddress(index);
-            var data = ScanListRecordCodec.Encode(new ScanListRecord(name, members));
+            var data = ScanListRecordCodec.Encode(new ScanListRecord(
+                name, members, priority1, priority2, lookBackA, lookBackB, dropout, dwell, revertMode));
             scanListRegions.Add(new EncodedRegion($"ScanList[{index + 1}]", address, data));
             SetBit(usedBuffer, index);
             index++;
