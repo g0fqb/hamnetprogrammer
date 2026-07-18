@@ -65,4 +65,46 @@ public sealed class WriteSessionAuditLog : IDisposable
     }
 
     public void Dispose() => _writer.Dispose();
+
+    /// <summary>Reads back every "region" event logged by <see cref="LogRegion"/> in a session -
+    /// the exact set of regions a write actually touched, used to scope a restore to undoing that
+    /// one session rather than guessing from the current (possibly since-changed) database state.</summary>
+    public static IReadOnlyList<(string Name, uint Address, int Length)> ReadWrittenRegions(string logPath)
+    {
+        var results = new List<(string, uint, int)>();
+        foreach (var line in File.ReadLines(logPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("evt", out var evt) || evt.GetString() != "region") continue;
+            if (!root.TryGetProperty("status", out var status) || status.GetString() != "written") continue;
+
+            var name = root.GetProperty("name").GetString()!;
+            var address = Convert.ToUInt32(root.GetProperty("address").GetString(), 16);
+            var length = root.GetProperty("length").GetInt32();
+            results.Add((name, address, length));
+        }
+        return results;
+    }
+
+    /// <summary>True if the session's log shows the write actually reached EndProgrammingSession -
+    /// i.e. whether anything was committed to flash at all. Writes are buffered until then, so a
+    /// session that failed before this point never touched the radio and has nothing to restore.</summary>
+    public static bool WasCommitted(string logPath)
+    {
+        foreach (var line in File.ReadLines(logPath))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("evt", out var evt) && evt.GetString() == "note" &&
+                root.TryGetProperty("message", out var msg) &&
+                msg.GetString() == CommitConfirmedMessage)
+                return true;
+        }
+        return false;
+    }
+
+    public const string CommitConfirmedMessage = "Write session ended (commit issued).";
 }

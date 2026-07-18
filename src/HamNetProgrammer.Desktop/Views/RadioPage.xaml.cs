@@ -15,6 +15,8 @@ public sealed partial class RadioPage : Page
     private readonly DispatcherQueue _uiQueue;
     private bool _operationInProgress;
     private string? _lastDiagnosticsSession;
+    private string? _lastWriteSessionFolder;
+    private string? _lastWritePort;
 
     public RadioPage()
     {
@@ -66,6 +68,7 @@ public sealed partial class RadioPage : Page
             RefreshButton.IsEnabled = !busy;
             AutoDetectButton.IsEnabled = !busy;
             SendReportButton.IsEnabled = !busy && _lastDiagnosticsSession is not null;
+            RestoreButton.IsEnabled = !busy && _lastWriteSessionFolder is not null;
             OperationProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             OperationProgressBar.IsIndeterminate = busy;
             OperationStatusText.Text = status;
@@ -248,6 +251,7 @@ public sealed partial class RadioPage : Page
         {
             using var auditLog = WriteSessionAuditLog.Start(
                 Path.Combine(sessionFolder, "audit.jsonl"), "write-codeplug", port, deviceId, toolVersion);
+            var committed = false;
 
             try
             {
@@ -298,7 +302,8 @@ public sealed partial class RadioPage : Page
                 writeRadio.EndProgrammingSession();
                 writeRadio.Close();
                 Log("Write complete.");
-                auditLog.LogNote("Write session ended (commit issued).");
+                committed = true;
+                auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
 
                 Log("Waiting for the radio to re-enumerate for a post-write verification backup...");
                 SetBusy(true, "Waiting for radio to re-enumerate...");
@@ -328,15 +333,23 @@ public sealed partial class RadioPage : Page
                 }
 
                 auditLog.End("success");
-                return (Success: true, Message: "Write complete.");
+                return (Success: true, Message: "Write complete.", Committed: committed);
             }
             catch (Exception ex)
             {
                 Log($"Error: {ex.Message}");
+                if (committed)
+                    Log("The write had already committed to the radio before this error - use Restore Previous Codeplug if anything looks wrong.");
                 auditLog.End("failed", ex.Message);
-                return (Success: false, Message: ex.Message);
+                return (Success: false, Message: ex.Message, Committed: committed);
             }
         });
+
+        if (result.Committed)
+        {
+            _lastWriteSessionFolder = sessionFolder;
+            _lastWritePort = port;
+        }
 
         _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = result.Success
             ? "Write complete - radio is re-enumerating."
@@ -468,6 +481,119 @@ public sealed partial class RadioPage : Page
             Log($"Failed to send diagnostic report: {ex.Message}");
             ConnectionStatusText.Text = $"Failed to send report: {ex.Message}";
         }
+
+        SetBusy(false);
+    }
+
+    private async void OnRestoreClicked(object sender, RoutedEventArgs e)
+    {
+        if (_operationInProgress) return;
+        if (_lastWriteSessionFolder is not { } sessionFolder || _lastWritePort is not { } port)
+        {
+            ConnectionStatusText.Text = "No committed write this session to restore.";
+            return;
+        }
+
+        var confirm = new ContentDialog
+        {
+            Title = "Restore Previous Codeplug",
+            Content = "This writes back exactly what the last Write Codeplug run overwrote, using the " +
+                      "automatic backup taken just before it - undoing that write. It does not touch " +
+                      "anything that write didn't touch. Continue?",
+            PrimaryButtonText = "Restore",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot,
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        SetBusy(true, "Restoring previous codeplug...");
+        Log("Restoring from the pre-write baseline backup...");
+
+        var result = await Task.Run(() =>
+        {
+            using var auditLog = WriteSessionAuditLog.Start(
+                Path.Combine(sessionFolder, "restore_audit.jsonl"), "restore-codeplug", port, null,
+                typeof(RadioPage).Assembly.GetName().Version?.ToString() ?? "dev");
+            try
+            {
+                var writtenRegions = WriteSessionAuditLog.ReadWrittenRegions(Path.Combine(sessionFolder, "audit.jsonl"));
+                if (writtenRegions.Count == 0)
+                {
+                    Log("Nothing was recorded as written in that session - nothing to restore.");
+                    auditLog.End("skipped", "No written regions recorded.");
+                    return (Success: true, Message: "Nothing to restore.");
+                }
+
+                var baseline = DumpReader.Load(
+                    Path.Combine(sessionFolder, "baseline_before.bin"),
+                    Path.Combine(sessionFolder, "baseline_before.manifest.csv"));
+
+                using var radio = new AnyToneD878Transport(port);
+                Log($"Opening {port}...");
+                radio.Open();
+                radio.StartProgrammingSession();
+                radio.ReadDeviceId();
+
+                var restored = AnyToneD878CodeplugRestorer.Restore(radio, baseline, writtenRegions, (region, index, total) =>
+                {
+                    if (region.Skipped)
+                    {
+                        Log($"  [{index}/{total}] {region.Name}: skipped - {region.SkipReason}");
+                        auditLog.LogRegion(region.Name, region.Address, region.Length, "skipped", region.SkipReason);
+                    }
+                    else
+                    {
+                        Log($"  [{index}/{total}] {region.Name}: restored");
+                        auditLog.LogRegion(region.Name, region.Address, region.Length, "restored");
+                    }
+                });
+
+                Log("Ending programming session (this commits the restore)...");
+                radio.EndProgrammingSession();
+                radio.Close();
+                var skipped = restored.Count(r => r.Skipped);
+                Log($"Restore complete: {restored.Count - skipped} region(s) restored, {skipped} skipped.");
+                auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
+
+                if (WaitForPortToReturn(port, TimeSpan.FromSeconds(45)))
+                {
+                    Log("Radio is back - taking post-restore verification backup...");
+                    using var afterRadio = new AnyToneD878Transport(port);
+                    afterRadio.Open();
+                    afterRadio.StartProgrammingSession();
+                    afterRadio.ReadDeviceId();
+                    var afterResults = AnyToneD878MemoryDumper.Dump(afterRadio,
+                        Path.Combine(sessionFolder, "baseline_after_restore.bin"),
+                        Path.Combine(sessionFolder, "baseline_after_restore.manifest.csv"),
+                        (region, index, total) =>
+                        {
+                            if (index % 40 == 0 || index == total) Log($"  post-restore [{index}/{total}] {region.Name}");
+                        });
+                    afterRadio.EndProgrammingSession();
+                    var failed = afterResults.Count(r => !r.Succeeded);
+                    auditLog.LogNote($"Post-restore backup: {afterResults.Count} regions, {failed} failed.");
+                }
+                else
+                {
+                    Log("WARNING: radio did not re-enumerate within 45s after restore.");
+                    auditLog.LogNote("WARNING: radio did not re-enumerate within 45s after restore.");
+                }
+
+                auditLog.End("success");
+                return (Success: true, Message: $"Restore complete: {restored.Count - skipped} region(s) restored.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error: {ex.Message}");
+                auditLog.End("failed", ex.Message);
+                return (Success: false, Message: ex.Message);
+            }
+        });
+
+        _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = result.Success
+            ? result.Message
+            : $"Restore failed: {result.Message}");
 
         SetBusy(false);
     }

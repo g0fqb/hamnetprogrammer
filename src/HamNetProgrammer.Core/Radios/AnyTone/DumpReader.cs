@@ -26,6 +26,8 @@ public sealed class DumpReader
         return reader;
     }
 
+    public bool HasRegion(string name) => _regions.ContainsKey(name);
+
     public ReadOnlySpan<byte> GetRegion(string name)
     {
         var (offset, length) = _regions[name];

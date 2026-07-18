@@ -49,6 +49,15 @@
 
             <Border Background="#1a232c" CornerRadius="6" Padding="14">
                 <StackPanel Spacing="8">
+                    <TextBlock Text="Restore previous codeplug" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                    <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                               Text="Available right after a Write Codeplug run that actually reached the radio. Writes back exactly what that write overwrote, from the automatic backup taken just before it - a way to back out if something looks wrong." />
+                    <Button x:Name="RestoreButton" Content="Restore Previous Codeplug" Click="OnRestoreClicked" IsEnabled="False" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
                     <TextBlock Text="Diagnostic report" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                     <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
                                Text="Every Write Codeplug run automatically saves a before/after memory backup and a log of every region written. If something looks wrong, send that report so it can be investigated - no need to attach anything yourself." />
