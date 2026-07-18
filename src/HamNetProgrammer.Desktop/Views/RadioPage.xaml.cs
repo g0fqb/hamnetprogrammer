@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using HamNetProgrammer.Core.Data;
 using HamNetProgrammer.Core.Diagnostics;
 using HamNetProgrammer.Core.Planning;
@@ -13,6 +14,12 @@ namespace HamNetProgrammer.Desktop.Views;
 
 public sealed partial class RadioPage : Page
 {
+    private static readonly SolidColorBrush NotConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x5a, 0x65, 0x70));
+    private static readonly SolidColorBrush ConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x4c, 0xaf, 0x50));
+    private static readonly SolidColorBrush ErrorBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0xe9, 0x45, 0x60));
+    private static readonly SolidColorBrush NeutralStatusBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x88, 0x96, 0xa0));
+    private static readonly SolidColorBrush SuccessStatusBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x6b, 0xb0, 0xb8));
+
     private readonly DispatcherQueue _uiQueue;
     private bool _operationInProgress;
     private string? _lastDiagnosticsSession;
@@ -70,9 +77,57 @@ public sealed partial class RadioPage : Page
             AutoDetectButton.IsEnabled = !busy;
             SendReportButton.IsEnabled = !busy && _lastDiagnosticsSession is not null;
             RestoreButton.IsEnabled = !busy && _lastWriteSessionFolder is not null;
-            OperationProgressBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-            OperationProgressBar.IsIndeterminate = busy;
+            // Only touch the progress bar/status text when a new operation is STARTING - when
+            // busy goes false, whatever SetProgress/SetComplete last wrote stays on screen rather
+            // than being blanked, which was the actual complaint: a fast operation could finish
+            // and clear its own status before anyone had a chance to read it.
+            if (busy)
+            {
+                OperationProgressBar.IsIndeterminate = true;
+                OperationStatusText.Text = status;
+                OperationStatusText.Foreground = NeutralStatusBrush;
+            }
+        });
+    }
+
+    /// <summary>Sets the persistent connection indicator (dot + text) at the bottom of the page -
+    /// distinct from OperationStatusText, which reports what the last/current operation did.</summary>
+    private void SetConnectionStatus(bool connected, string text)
+    {
+        _uiQueue.TryEnqueue(() =>
+        {
+            ConnectionDot.Fill = connected ? ConnectedBrush : NotConnectedBrush;
+            ConnectionStatusText.Text = text;
+        });
+    }
+
+    private static string DescribeDevice(string deviceId, string port) =>
+        $"Connected: {RadioRiskCatalog.Lookup(deviceId).ModelLabel} ({deviceId}) on {port}";
+
+    /// <summary>Switches the progress bar to determinate and reports real progress - used from
+    /// callbacks that already know a current/total (bytes written, regions dumped, etc.).</summary>
+    private void SetProgress(long current, long total, string status)
+    {
+        _uiQueue.TryEnqueue(() =>
+        {
+            OperationProgressBar.IsIndeterminate = false;
+            OperationProgressBar.Maximum = Math.Max(total, 1);
+            OperationProgressBar.Value = Math.Min(current, OperationProgressBar.Maximum);
             OperationStatusText.Text = status;
+            OperationStatusText.Foreground = NeutralStatusBrush;
+        });
+    }
+
+    /// <summary>Reports a finished operation's outcome persistently (fills the progress bar,
+    /// colors the status text) so a fast operation doesn't complete without any visible trace.</summary>
+    private void SetComplete(bool success, string message)
+    {
+        _uiQueue.TryEnqueue(() =>
+        {
+            OperationProgressBar.IsIndeterminate = false;
+            OperationProgressBar.Value = OperationProgressBar.Maximum;
+            OperationStatusText.Text = (success ? "Done - " : "Failed - ") + message;
+            OperationStatusText.Foreground = success ? SuccessStatusBrush : ErrorBrush;
         });
     }
 
@@ -131,13 +186,15 @@ public sealed partial class RadioPage : Page
                 var items = (IReadOnlyList<string>)PortComboBox.ItemsSource;
                 var index = items.ToList().IndexOf(result.Port);
                 if (index >= 0) PortComboBox.SelectedIndex = index;
-                ConnectionStatusText.Text = $"Found radio on {result.Port} - {result.DeviceId}";
             });
+            SetConnectionStatus(true, DescribeDevice(result.DeviceId, result.Port));
+            SetComplete(true, $"Radio found on {result.Port}.");
             Log($"Radio found on {result.Port}.");
         }
         else
         {
-            _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = "No radio found on any free port.");
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, "No radio found on any free port.");
             Log("No radio found on any free port.");
         }
 
@@ -149,7 +206,7 @@ public sealed partial class RadioPage : Page
         if (_operationInProgress) return;
         if (SelectedPort is not { } port)
         {
-            ConnectionStatusText.Text = "Select a port first.";
+            SetComplete(false, "Select a port first.");
             return;
         }
 
@@ -177,12 +234,14 @@ public sealed partial class RadioPage : Page
         {
             Log($"Device identifier: {result.Message}");
             Log("Connection OK.");
-            _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = $"Connected - {result.Message}");
+            SetConnectionStatus(true, DescribeDevice(result.Message, port));
+            SetComplete(true, "Connection OK.");
         }
         else
         {
             Log($"Error: {result.Message}");
-            _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = $"Connection failed: {result.Message}");
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, $"Connection failed: {result.Message}");
         }
 
         SetBusy(false);
@@ -193,7 +252,7 @@ public sealed partial class RadioPage : Page
         if (_operationInProgress) return;
         if (SelectedPort is not { } port)
         {
-            ConnectionStatusText.Text = "Select a port first.";
+            SetComplete(false, "Select a port first.");
             return;
         }
 
@@ -223,13 +282,15 @@ public sealed partial class RadioPage : Page
         catch (Exception ex)
         {
             Log($"Error identifying device: {ex.Message}");
-            ConnectionStatusText.Text = $"Could not identify device: {ex.Message}";
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, $"Could not identify device: {ex.Message}");
             SetBusy(false);
             return;
         }
 
         var profile = RadioRiskCatalog.Lookup(deviceId);
         Log($"Device identifier: {deviceId} ({profile.ModelLabel}, {profile.Tier} risk).");
+        SetConnectionStatus(true, DescribeDevice(deviceId, port));
         SetBusy(false);
 
         if (!await RiskDisclaimerDialog.ShowAsync(this.XamlRoot, profile))
@@ -268,6 +329,7 @@ public sealed partial class RadioPage : Page
                         Path.Combine(sessionFolder, "baseline_before.manifest.csv"),
                         (region, index, total) =>
                         {
+                            SetProgress(index, total, $"Pre-write backup... [{index}/{total}] {region.Name}");
                             if (index % 40 == 0 || index == total) Log($"  baseline [{index}/{total}] {region.Name}");
                         });
                     radio.EndProgrammingSession();
@@ -331,7 +393,7 @@ public sealed partial class RadioPage : Page
                     var elapsed = DateTime.Now - started;
                     Log($"  [{index}/{total}] {region.Name} done - {written:N0}/{totalW:N0} bytes, {elapsed.TotalSeconds:F0}s elapsed");
                     auditLog.LogRegion(region.Name, region.Address, region.Data.Length, "written");
-                    SetBusy(true, $"Writing... [{index}/{total}] {region.Name} ({written:N0}/{totalW:N0} bytes)");
+                    SetProgress(written, totalW, $"Writing... [{index}/{total}] {region.Name} ({written:N0}/{totalW:N0} bytes)");
                 });
 
                 Log("Ending programming session (this commits the write - device will drop off USB and re-enumerate)...");
@@ -355,21 +417,24 @@ public sealed partial class RadioPage : Page
                         Path.Combine(sessionFolder, "baseline_after.manifest.csv"),
                         (region, index, total) =>
                         {
+                            SetProgress(index, total, $"Post-write backup... [{index}/{total}] {region.Name}");
                             if (index % 40 == 0 || index == total) Log($"  post-write [{index}/{total}] {region.Name}");
                         });
                     afterRadio.EndProgrammingSession();
                     var failed = afterResults.Count(r => !r.Succeeded);
                     auditLog.LogNote($"Post-write backup: {afterResults.Count} regions, {failed} failed.");
                     Log($"Post-write backup complete ({afterResults.Count} regions, {failed} failed).");
+                    SetConnectionStatus(true, DescribeDevice(deviceId, port));
                 }
                 else
                 {
                     Log("WARNING: radio did not re-enumerate within 45s. No post-write backup taken.");
                     auditLog.LogNote("WARNING: radio did not re-enumerate within 45s after write - no post-write backup taken.");
+                    SetConnectionStatus(false, "Not connected - radio did not re-enumerate.");
                 }
 
                 auditLog.End("success");
-                return (Success: true, Message: "Write complete.", Committed: committed);
+                return (Success: true, Message: $"Write complete - {regions.Count} regions, {totalBytes:N0} bytes.", Committed: committed);
             }
             catch (Exception ex)
             {
@@ -387,10 +452,7 @@ public sealed partial class RadioPage : Page
             _lastWritePort = port;
         }
 
-        _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = result.Success
-            ? "Write complete - radio is re-enumerating."
-            : $"Write failed: {result.Message}");
-
+        SetComplete(result.Success, result.Message);
         SetBusy(false);
     }
 
@@ -420,7 +482,7 @@ public sealed partial class RadioPage : Page
         {
             if (SelectedPort is not { } port)
             {
-                ConnectionStatusText.Text = "Select a port first, or write a codeplug, before sending a report.";
+                SetComplete(false, "Select a port first, or write a codeplug, before sending a report.");
                 return;
             }
 
@@ -452,10 +514,12 @@ public sealed partial class RadioPage : Page
                     radio.StartProgrammingSession();
                     var deviceId = radio.ReadDeviceId();
                     auditLog.LogNote($"Device identifier: {deviceId}");
+                    SetConnectionStatus(true, DescribeDevice(deviceId, port));
                     var results = AnyToneD878MemoryDumper.Dump(radio,
                         Path.Combine(folder, "backup.bin"), Path.Combine(folder, "backup.manifest.csv"),
                         (region, index, total) =>
                         {
+                            SetProgress(index, total, $"Backing up... [{index}/{total}] {region.Name}");
                             if (index % 40 == 0 || index == total) Log($"  [{index}/{total}] {region.Name}");
                         });
                     radio.EndProgrammingSession();
@@ -475,7 +539,7 @@ public sealed partial class RadioPage : Page
             SetBusy(false);
             if (!backupOk)
             {
-                ConnectionStatusText.Text = "Backup failed - report not sent.";
+                SetComplete(false, "Backup failed - report not sent.");
                 return;
             }
             sessionFolder = folder;
@@ -510,12 +574,12 @@ public sealed partial class RadioPage : Page
             var toolVersion = typeof(RadioPage).Assembly.GetName().Version?.ToString() ?? "dev";
             await DiagnosticsUploader.UploadAsync(zipPath, deviceIdForReport, toolVersion, messageDialog.Text);
             Log("Diagnostic report sent.");
-            ConnectionStatusText.Text = "Diagnostic report sent - thank you.";
+            SetComplete(true, "Diagnostic report sent - thank you.");
         }
         catch (Exception ex)
         {
             Log($"Failed to send diagnostic report: {ex.Message}");
-            ConnectionStatusText.Text = $"Failed to send report: {ex.Message}";
+            SetComplete(false, $"Failed to send report: {ex.Message}");
         }
 
         SetBusy(false);
@@ -526,7 +590,7 @@ public sealed partial class RadioPage : Page
         if (_operationInProgress) return;
         if (_lastWriteSessionFolder is not { } sessionFolder || _lastWritePort is not { } port)
         {
-            ConnectionStatusText.Text = "No committed write this session to restore.";
+            SetComplete(false, "No committed write this session to restore.");
             return;
         }
 
@@ -569,7 +633,8 @@ public sealed partial class RadioPage : Page
                 Log($"Opening {port}...");
                 radio.Open();
                 radio.StartProgrammingSession();
-                radio.ReadDeviceId();
+                var restoreDeviceId = radio.ReadDeviceId();
+                SetConnectionStatus(true, DescribeDevice(restoreDeviceId, port));
 
                 var restored = AnyToneD878CodeplugRestorer.Restore(radio, baseline, writtenRegions, (region, index, total) =>
                 {
@@ -583,6 +648,7 @@ public sealed partial class RadioPage : Page
                         Log($"  [{index}/{total}] {region.Name}: restored");
                         auditLog.LogRegion(region.Name, region.Address, region.Length, "restored");
                     }
+                    SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
                 });
 
                 Log("Ending programming session (this commits the restore)...");
@@ -604,6 +670,7 @@ public sealed partial class RadioPage : Page
                         Path.Combine(sessionFolder, "baseline_after_restore.manifest.csv"),
                         (region, index, total) =>
                         {
+                            SetProgress(index, total, $"Post-restore backup... [{index}/{total}] {region.Name}");
                             if (index % 40 == 0 || index == total) Log($"  post-restore [{index}/{total}] {region.Name}");
                         });
                     afterRadio.EndProgrammingSession();
@@ -627,10 +694,7 @@ public sealed partial class RadioPage : Page
             }
         });
 
-        _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = result.Success
-            ? result.Message
-            : $"Restore failed: {result.Message}");
-
+        SetComplete(result.Success, result.Message);
         SetBusy(false);
     }
 
@@ -639,7 +703,7 @@ public sealed partial class RadioPage : Page
         if (_operationInProgress) return;
         if (SelectedPort is not { } port)
         {
-            ConnectionStatusText.Text = "Select a port first.";
+            SetComplete(false, "Select a port first.");
             return;
         }
 
@@ -660,14 +724,13 @@ public sealed partial class RadioPage : Page
                 radio.StartProgrammingSession();
                 var deviceId = radio.ReadDeviceId();
                 Log($"Device identifier: {deviceId}");
+                SetConnectionStatus(true, DescribeDevice(deviceId, port));
 
                 var results = AnyToneD878MemoryDumper.Dump(radio, binPath, manifestPath, (region, index, total) =>
                 {
+                    SetProgress(index, total, $"Backing up... [{index}/{total}] {region.Name}");
                     if (index % 20 == 0 || index == total)
-                    {
                         Log($"  [{index}/{total}] {region.Name}");
-                        SetBusy(true, $"Backing up... [{index}/{total}] {region.Name}");
-                    }
                 });
 
                 radio.EndProgrammingSession();
@@ -683,7 +746,7 @@ public sealed partial class RadioPage : Page
             }
         });
 
-        _uiQueue.TryEnqueue(() => ConnectionStatusText.Text = result.Message);
+        SetComplete(result.Success, result.Message);
         SetBusy(false);
     }
 }
