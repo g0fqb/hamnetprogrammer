@@ -4,20 +4,57 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Background="#10161d">
 
-    <StackPanel Padding="16" Spacing="14" MaxWidth="700">
-        <TextBlock Text="Radio" FontSize="22" FontWeight="Bold" Foreground="#e0924a" />
-        <TextBlock Foreground="#8896a0" FontSize="13" TextWrapping="Wrap">
-            Reading from and writing to the radio is handled by the command-line tool for now
-            (dump / encode / write-codeplug). A connected view here - port picker, live
-            read/write with progress, and verification - is planned next.
-        </TextBlock>
+    <Grid Padding="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-            <StackPanel Spacing="8">
-                <TextBlock Text="Available serial ports" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                <ListView x:Name="PortListView" Background="#212c36" CornerRadius="4" />
-                <Button x:Name="RefreshButton" Content="Refresh" Click="OnRefreshClicked" />
-            </StackPanel>
+        <TextBlock Grid.Row="0" Text="Radio" FontSize="22" FontWeight="Bold" Foreground="#e0924a" Margin="0,0,0,12" />
+
+        <StackPanel Grid.Row="1" Spacing="12" MaxWidth="760" HorizontalAlignment="Left">
+
+            <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Connection" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ComboBox x:Name="PortComboBox" Width="160" PlaceholderText="Select port" />
+                        <Button x:Name="RefreshButton" Content="Refresh Ports" Click="OnRefreshClicked" />
+                        <Button x:Name="AutoDetectButton" Content="Auto-Detect Radio" Click="OnAutoDetectClicked"
+                                ToolTipService.ToolTip="Tries each free serial port for the AT-D878UV's handshake response. Ports already open in another program are skipped." />
+                        <Button x:Name="TestConnectionButton" Content="Test Connection" Click="OnTestConnectionClicked" />
+                    </StackPanel>
+                    <TextBlock x:Name="ConnectionStatusText" FontSize="12" Foreground="#8896a0" Text="Not connected." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Write codeplug to radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                    <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                               Text="Encodes the current SQLite codeplug and writes every region to the radio in one programming session. The radio will drop off USB and re-enumerate a few seconds after this completes." />
+                    <Button x:Name="WriteCodeplugButton" Content="Write Codeplug to Radio" Click="OnWriteCodeplugClicked" Background="#e0924a" Foreground="#10161d" FontWeight="SemiBold" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Backup radio memory" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                    <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                               Text="Reads every known memory region from the radio to a timestamped .bin + .manifest.csv pair in the dumps folder. Safe, read-only." />
+                    <Button x:Name="BackupButton" Content="Backup Radio Memory" Click="OnBackupClicked" />
+                </StackPanel>
+            </Border>
+
+            <ProgressBar x:Name="OperationProgressBar" Minimum="0" Maximum="1" Value="0" Visibility="Collapsed" />
+            <TextBlock x:Name="OperationStatusText" FontSize="12" Foreground="#6bb0b8" />
+        </StackPanel>
+
+        <Border Grid.Row="2" Background="#1a232c" CornerRadius="6" Margin="0,14,0,0">
+            <ScrollViewer x:Name="LogScrollViewer" Padding="10">
+                <TextBlock x:Name="LogText" FontFamily="Consolas" FontSize="11" Foreground="#dce6ea" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+            </ScrollViewer>
         </Border>
-    </StackPanel>
+    </Grid>
 </Page>
