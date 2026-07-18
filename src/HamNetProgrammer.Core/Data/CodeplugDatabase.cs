@@ -53,11 +53,17 @@ public static class CodeplugDatabase
         );
 
         -- Talkgroups today; individual DMR contacts will use the same table once imported.
+        -- Network tags which talkgroup network (Brandmeister/TGIF/FreeDMR/etc.) an imported
+        -- contact came from - NULL for manually-created contacts. Talkgroup numbering genuinely
+        -- differs by network, so imports deliberately don't try to merge/dedupe the same DmrId
+        -- across networks (see TalkGroupNetworkImporter) - that would imply a false equivalence
+        -- the ID alone doesn't guarantee.
         CREATE TABLE IF NOT EXISTS Contacts (
             Id INTEGER PRIMARY KEY,
             Name TEXT NOT NULL,
             CallType TEXT NOT NULL DEFAULT 'Group',
             DmrId INTEGER NULL,
+            Network TEXT NULL,
             UNIQUE(Name, CallType)
         );
 
@@ -191,6 +197,11 @@ public static class CodeplugDatabase
         ("RoamingEnabled", "INTEGER NOT NULL DEFAULT 1"),
     ];
 
+    private static readonly (string Column, string Definition)[] ContactsMigrationColumns =
+    [
+        ("Network", "TEXT NULL"),
+    ];
+
     public static SqliteConnection OpenOrCreate(string path)
     {
         var connection = new SqliteConnection($"Data Source={path}");
@@ -203,6 +214,7 @@ public static class CodeplugDatabase
         MigrateColumns(connection, "ScanLists", ScanListMigrationColumns);
         MigrateColumns(connection, "Zones", ZoneMigrationColumns);
         MigrateColumns(connection, "RadioSettings", RadioSettingsMigrationColumns);
+        MigrateColumns(connection, "Contacts", ContactsMigrationColumns);
         return connection;
     }
 
