@@ -37,7 +37,7 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <CheckBox Grid.Column="0" IsChecked="{Binding IsActive}" Tag="{Binding Name}"
-                                              Click="OnZoneActiveToggled"
+                                              Click="OnZoneActiveToggled" MinWidth="0" Padding="0" VerticalAlignment="Center"
                                               ToolTipService.ToolTip="Active zones are written to the radio; inactive ones are parked and skipped." />
                                     <TextBlock Grid.Column="1" Text="{Binding Name}" FontFamily="Consolas" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis" />
