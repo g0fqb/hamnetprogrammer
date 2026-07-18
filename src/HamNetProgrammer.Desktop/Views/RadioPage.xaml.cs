@@ -23,6 +23,7 @@ public sealed partial class RadioPage : Page
 
     private readonly DispatcherQueue _uiQueue;
     private bool _operationInProgress;
+    private bool _radioSettling;
     private string? _lastDiagnosticsSession;
     private string? _lastWriteSessionFolder;
     private string? _lastWritePort;
@@ -66,18 +67,32 @@ public sealed partial class RadioPage : Page
         });
     }
 
-    private void SetBusy(bool busy, string status = "")
+    /// <summary>Enables/disables every button that opens a session on the radio. Gated on both
+    /// _operationInProgress (an operation is actively running) and _radioSettling (the radio just
+    /// ended a session - even a read-only one like Test Connection - and is mid drop-off/
+    /// re-enumerate, so a new session opened right now would fail). RefreshButton and the port
+    /// picker are exempt since they never touch the radio.</summary>
+    private void UpdateButtonStates()
     {
         _uiQueue.TryEnqueue(() =>
         {
-            _operationInProgress = busy;
-            TestConnectionButton.IsEnabled = !busy;
-            WriteCodeplugButton.IsEnabled = !busy;
-            BackupButton.IsEnabled = !busy;
-            RefreshButton.IsEnabled = !busy;
-            AutoDetectButton.IsEnabled = !busy;
-            SendReportButton.IsEnabled = !busy && _lastDiagnosticsSession is not null;
-            RestoreButton.IsEnabled = !busy && _lastWriteSessionFolder is not null;
+            var enabled = !_operationInProgress && !_radioSettling;
+            TestConnectionButton.IsEnabled = enabled;
+            WriteCodeplugButton.IsEnabled = enabled;
+            BackupButton.IsEnabled = enabled;
+            AutoDetectButton.IsEnabled = enabled;
+            SendReportButton.IsEnabled = enabled && _lastDiagnosticsSession is not null;
+            RestoreButton.IsEnabled = enabled && _lastWriteSessionFolder is not null;
+            RefreshButton.IsEnabled = !_operationInProgress;
+        });
+    }
+
+    private void SetBusy(bool busy, string status = "")
+    {
+        _operationInProgress = busy;
+        UpdateButtonStates();
+        _uiQueue.TryEnqueue(() =>
+        {
             // Only touch the progress bar/status text when a new operation is STARTING - when
             // busy goes false, whatever SetProgress/SetComplete last wrote stays on screen rather
             // than being blanked, which was the actual complaint: a fast operation could finish
@@ -133,6 +148,38 @@ public sealed partial class RadioPage : Page
             OperationStatusText.Text = (success ? "Done - " : "Failed - ") + message;
             OperationStatusText.Foreground = success ? SuccessStatusBrush : ErrorBrush;
         });
+    }
+
+    /// <summary>Ending ANY programming session - not just one that committed a write - causes the
+    /// radio to drop off USB and re-enumerate (confirmed directly: Test Connection alone triggers
+    /// it). Nothing previously waited for that to finish before the next click could open a new
+    /// session, so a Write Codeplug immediately after Test Connection would fail. This disables
+    /// every radio-opening button until the port is confirmed to have come back, running in the
+    /// background rather than blocking the click that triggered it - it's a background settle
+    /// watch, not an in-line wait.</summary>
+    private async Task WatchRadioSettleAsync(string port)
+    {
+        _radioSettling = true;
+        UpdateButtonStates();
+        SetProgress(0, 1, "Radio is resetting after that session - waiting for it to come back...");
+        Log($"Watching {port} for the radio to finish resetting before allowing another session...");
+
+        var backAgain = await Task.Run(() => WaitForPortToReturn(port, TimeSpan.FromSeconds(30)));
+
+        _radioSettling = false;
+        UpdateButtonStates();
+
+        if (backAgain)
+        {
+            Log("Radio is back and ready for another session.");
+            SetComplete(true, "Radio ready.");
+        }
+        else
+        {
+            Log($"WARNING: {port} did not come back within 30s after the last session.");
+            SetConnectionStatus(false, "Not connected - radio did not come back after last session.");
+            SetComplete(false, "Radio did not come back - check the connection and try again.");
+        }
     }
 
     private async void OnAutoDetectClicked(object sender, RoutedEventArgs e)
@@ -192,17 +239,17 @@ public sealed partial class RadioPage : Page
                 if (index >= 0) PortComboBox.SelectedIndex = index;
             });
             SetConnectionStatus(true, DescribeDevice(result.DeviceId, result.Port));
-            SetComplete(true, $"Radio found on {result.Port}.");
             Log($"Radio found on {result.Port}.");
+            SetBusy(false);
+            await WatchRadioSettleAsync(result.Port);
         }
         else
         {
             SetConnectionStatus(false, "Not connected.");
             SetComplete(false, "No radio found on any free port.");
             Log("No radio found on any free port.");
+            SetBusy(false);
         }
-
-        SetBusy(false);
     }
 
     private async void OnTestConnectionClicked(object sender, RoutedEventArgs e)
@@ -239,16 +286,16 @@ public sealed partial class RadioPage : Page
             Log($"Device identifier: {result.Message}");
             Log("Connection OK.");
             SetConnectionStatus(true, DescribeDevice(result.Message, port));
-            SetComplete(true, "Connection OK.");
+            SetBusy(false);
+            await WatchRadioSettleAsync(port);
         }
         else
         {
             Log($"Error: {result.Message}");
             SetConnectionStatus(false, "Not connected.");
             SetComplete(false, $"Connection failed: {result.Message}");
+            SetBusy(false);
         }
-
-        SetBusy(false);
     }
 
     private async void OnWriteCodeplugClicked(object sender, RoutedEventArgs e)
@@ -546,6 +593,10 @@ public sealed partial class RadioPage : Page
                 SetComplete(false, "Backup failed - report not sent.");
                 return;
             }
+            // Fire-and-forget: nothing else in this flow needs the radio again (the rest is
+            // packaging/upload), so there's no reason to make sending the report wait on it -
+            // it just needs to disable the radio buttons in the background until settled.
+            _ = WatchRadioSettleAsync(port);
             sessionFolder = folder;
             _lastDiagnosticsSession = folder;
         }
@@ -750,7 +801,15 @@ public sealed partial class RadioPage : Page
             }
         });
 
-        SetComplete(result.Success, result.Message);
         SetBusy(false);
+        if (result.Success)
+        {
+            SetComplete(true, result.Message);
+            await WatchRadioSettleAsync(port);
+        }
+        else
+        {
+            SetComplete(false, result.Message);
+        }
     }
 }
