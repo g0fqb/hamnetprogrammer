@@ -76,7 +76,6 @@ public sealed partial class RadioSettingsPage : Page
     private ComboBox? _lonSignCombo;
     private TextBox? _sendingTextBox;
     private TextBox? _gpsTemplateBox;
-    private CheckBox? _syncListsWithZonesBox;
 
     public RadioSettingsPage()
     {
@@ -95,7 +94,7 @@ public sealed partial class RadioSettingsPage : Page
                        AprsDestSsid, AprsSignalPath, AprsAutoTxIntervalSeconds, AprsReportChannelId, AprsTalkGroupId,
                        AprsCallType, AprsSlot, AprsFixedLocationBeacon, AprsLatitudeDegree, AprsLatitudeMinute,
                        AprsLatitudeSign, AprsLongitudeDegree, AprsLongitudeMinute, AprsLongitudeSign,
-                       AprsSendingText, GpsTemplateText, SyncListsWithZones
+                       AprsSendingText, GpsTemplateText
                 FROM RadioSettings WHERE Id = 1;
                 """;
             using var reader = cmd.ExecuteReader();
@@ -127,7 +126,6 @@ public sealed partial class RadioSettingsPage : Page
             var lonSign = reader.IsDBNull(19) ? "E" : reader.GetString(19);
             var sendingText = reader.IsDBNull(20) ? "" : reader.GetString(20);
             var gpsTemplateText = reader.IsDBNull(21) ? "" : reader.GetString(21);
-            var syncListsWithZones = reader.GetInt64(22) != 0;
             reader.Close();
 
             var allChannels = ChannelQueries.GetAllChannels(db);
@@ -154,7 +152,6 @@ public sealed partial class RadioSettingsPage : Page
             _lonSignCombo = new ComboBox { ItemsSource = new[] { "E", "W" }, SelectedItem = lonSign };
             _sendingTextBox = new TextBox { Text = sendingText, PlaceholderText = "Free text appended to your APRS report", MaxLength = 60 };
             _gpsTemplateBox = new TextBox { Text = gpsTemplateText, PlaceholderText = "Template shown alongside GPS fixes", MaxLength = 32 };
-            _syncListsWithZonesBox = new CheckBox { Content = "Keep Scan/Group/Roaming Lists in sync with Zones", IsChecked = syncListsWithZones };
 
             BuildForm();
             SummaryText.Text = $"({AppPaths.CodeplugDbPath})";
@@ -202,13 +199,6 @@ public sealed partial class RadioSettingsPage : Page
         FormPanel.Children.Add(FormField.SectionHeader("Text"));
         FormPanel.Children.Add(FormField.Row("APRS Sending Text", _sendingTextBox!, "Free text appended to your outgoing APRS report, e.g. a comment or status."));
         FormPanel.Children.Add(FormField.Row("GPS Template Text", _gpsTemplateBox!, "Text shown on the radio's display alongside a GPS fix."));
-
-        FormPanel.Children.Add(FormField.SectionHeader("Automation"));
-        FormPanel.Children.Add(FormField.Row("Sync Lists", _syncListsWithZonesBox!,
-            "Before every Write Codeplug, regenerate each zone's Scan List and Group List membership " +
-            "(and talkgroup Roaming Zones) from the zones' current channels. Turn this off if you've " +
-            "manually customized list membership and don't want it overwritten - Priority Channel/" +
-            "timing settings on Scan Lists are never touched either way, only membership."));
     }
 
     private void OnSaveClicked(object sender, RoutedEventArgs e)
@@ -226,7 +216,7 @@ public sealed partial class RadioSettingsPage : Page
                     AprsSlot = $slot, AprsFixedLocationBeacon = $fixedLocation, AprsLatitudeDegree = $latDeg,
                     AprsLatitudeMinute = $latMin, AprsLatitudeSign = $latSign, AprsLongitudeDegree = $lonDeg,
                     AprsLongitudeMinute = $lonMin, AprsLongitudeSign = $lonSign, AprsSendingText = $sendingText,
-                    GpsTemplateText = $gpsTemplate, SyncListsWithZones = $syncListsWithZones
+                    GpsTemplateText = $gpsTemplate
                 WHERE Id = 1;
                 """;
             cmd.Parameters.Add(new SqliteParameter("$gpsEnabled", _gpsEnabledBox!.IsChecked == true ? 1 : 0));
@@ -251,7 +241,6 @@ public sealed partial class RadioSettingsPage : Page
             cmd.Parameters.Add(new SqliteParameter("$lonSign", (string)_lonSignCombo!.SelectedItem));
             cmd.Parameters.Add(new SqliteParameter("$sendingText", (object?)NullIfEmpty(_sendingTextBox!.Text) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$gpsTemplate", (object?)NullIfEmpty(_gpsTemplateBox!.Text) ?? DBNull.Value));
-            cmd.Parameters.Add(new SqliteParameter("$syncListsWithZones", _syncListsWithZonesBox!.IsChecked == true ? 1 : 0));
             cmd.ExecuteNonQuery();
 
             StatusText.Text = "Saved.";

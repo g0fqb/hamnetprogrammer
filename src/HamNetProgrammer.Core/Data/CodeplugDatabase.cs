@@ -156,7 +156,10 @@ public static class CodeplugDatabase
             AprsLongitudeSign TEXT NULL,
             AprsSendingText TEXT NULL,
             GpsTemplateText TEXT NULL,
-            SyncListsWithZones INTEGER NOT NULL DEFAULT 1
+            SyncListsWithZones INTEGER NOT NULL DEFAULT 1,
+            ScanListsEnabled INTEGER NOT NULL DEFAULT 1,
+            GroupListsEnabled INTEGER NOT NULL DEFAULT 1,
+            RoamingEnabled INTEGER NOT NULL DEFAULT 1
         );
         INSERT OR IGNORE INTO RadioSettings (Id) VALUES (1);
         """;
@@ -183,6 +186,9 @@ public static class CodeplugDatabase
     private static readonly (string Column, string Definition)[] RadioSettingsMigrationColumns =
     [
         ("SyncListsWithZones", "INTEGER NOT NULL DEFAULT 1"),
+        ("ScanListsEnabled", "INTEGER NOT NULL DEFAULT 1"),
+        ("GroupListsEnabled", "INTEGER NOT NULL DEFAULT 1"),
+        ("RoamingEnabled", "INTEGER NOT NULL DEFAULT 1"),
     ];
 
     public static SqliteConnection OpenOrCreate(string path)

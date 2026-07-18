@@ -22,21 +22,38 @@ public static class AnyToneD878CodeplugEncoder
     {
         var regions = new List<EncodedRegion>();
 
+        var (scanListsEnabled, groupListsEnabled, roamingEnabled) = ReadListFeatureFlags(db);
+
         var contactIndex = BuildContactIndex(db);
         var radioIdIndex = BuildRadioIdIndex(db);
         var scanListIndex = BuildScanListIndex(db);
         var groupListIndex = BuildGroupListIndex(db);
 
-        regions.AddRange(EncodeChannels(db, contactIndex, radioIdIndex, scanListIndex, groupListIndex));
+        regions.AddRange(EncodeChannels(db, contactIndex, radioIdIndex, scanListIndex, groupListIndex, scanListsEnabled, groupListsEnabled));
         regions.AddRange(EncodeZones(db));
-        regions.AddRange(EncodeScanLists(db));
-        regions.AddRange(EncodeGroupLists(db, contactIndex));
-        regions.AddRange(EncodeRoaming(db));
+        if (scanListsEnabled) regions.AddRange(EncodeScanLists(db));
+        if (groupListsEnabled) regions.AddRange(EncodeGroupLists(db, contactIndex));
+        if (roamingEnabled) regions.AddRange(EncodeRoaming(db));
         regions.AddRange(EncodeTalkGroups(db, contactIndex));
         regions.AddRange(EncodeRadioIds(db, radioIdIndex));
         regions.AddRange(EncodeRadioSettings(db));
 
         return regions;
+    }
+
+    // "Disabled" means don't write this feature's data to the radio at all - not merely "don't
+    // auto-sync membership from zones" (that's the separate SyncListsWithZones setting). A
+    // disabled feature's regions (including its own "Used" bitmap) are omitted from the write plan
+    // entirely, leaving whatever the radio already has for it untouched; channels referencing a
+    // disabled feature get that reference dropped (null/none) rather than pointing at a slot that
+    // was never written this session.
+    private static (bool ScanListsEnabled, bool GroupListsEnabled, bool RoamingEnabled) ReadListFeatureFlags(SqliteConnection db)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT ScanListsEnabled, GroupListsEnabled, RoamingEnabled FROM RadioSettings WHERE Id = 1;";
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return (true, true, true);
+        return (reader.GetInt64(0) != 0, reader.GetInt64(1) != 0, reader.GetInt64(2) != 0);
     }
 
     private static Dictionary<long, uint> BuildContactIndex(SqliteConnection db)
@@ -89,7 +106,7 @@ public static class AnyToneD878CodeplugEncoder
         return map;
     }
 
-    private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex, Dictionary<long, byte> groupListIndex)
+    private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex, Dictionary<long, byte> groupListIndex, bool scanListsEnabled, bool groupListsEnabled)
     {
         var banks = new Dictionary<int, byte[]>();
         int BankLength(int bank) => bank == 31 ? 2176 : ChannelsPerBank * 64;
@@ -121,8 +138,8 @@ public static class AnyToneD878CodeplugEncoder
                 TimeSlot: reader.IsDBNull(8) ? (byte)1 : (byte)reader.GetInt32(8),
                 ContactIndex: reader.IsDBNull(9) ? 0 : contactIndex.GetValueOrDefault(reader.GetInt64(9)),
                 RadioIdIndex: reader.IsDBNull(10) ? (byte)0 : radioIdIndex.GetValueOrDefault(reader.GetInt64(10)),
-                ScanListIndex: reader.IsDBNull(11) ? null : scanListIndex.GetValueOrDefault(reader.GetInt64(11)),
-                GroupListIndex: reader.IsDBNull(12) ? null : groupListIndex.GetValueOrDefault(reader.GetInt64(12)),
+                ScanListIndex: !scanListsEnabled || reader.IsDBNull(11) ? null : scanListIndex.GetValueOrDefault(reader.GetInt64(11)),
+                GroupListIndex: !groupListsEnabled || reader.IsDBNull(12) ? null : groupListIndex.GetValueOrDefault(reader.GetInt64(12)),
                 Name: reader.GetString(1));
 
             if (!banks.TryGetValue(bank, out var buffer))

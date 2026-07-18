@@ -62,6 +62,7 @@ public class AppShell : Window
             CreateNavItem("Scan Lists", Glyphs.IconScanLists, "scanlists"),
             CreateNavItem("Group Lists", Glyphs.IconGroupLists, "grouplists"),
             CreateNavItem("Roaming", Glyphs.IconRoaming, "roaming"),
+            CreateNavItem("Lists", Glyphs.IconCheck, "lists"),
             CreateNavItem("Radio", Glyphs.IconRadio, "radio"),
             CreateNavItem("Settings", Glyphs.IconSettings, "settings"),
             CreateNavItem("Help", Glyphs.IconHelp, "help"),
@@ -176,6 +177,9 @@ public class AppShell : Window
                 break;
             case "roaming":
                 _contentFrame.Navigate(typeof(RoamingZonesPage));
+                break;
+            case "lists":
+                _contentFrame.Navigate(typeof(ListsPage));
                 break;
             case "radio":
                 _contentFrame.Navigate(typeof(RadioPage));
