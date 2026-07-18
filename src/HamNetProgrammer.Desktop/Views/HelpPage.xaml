@@ -15,10 +15,10 @@
                     <TextBlock Text="Support" FontSize="16" FontWeight="Bold" Foreground="#ffb74d" />
                     <TextBlock Foreground="#dddddd" FontSize="13" TextWrapping="Wrap">
                         HamNetProgrammer is a free, open-source codeplug tool for the AnyTone
-                        AT-D878UV, built to fix the real problems in the vendor tools: CPS's
-                        Zones and Scan Lists silently break on every CSV reimport, and RT
-                        Systems runs out of memory importing a full talkgroup database. If it's
-                        useful to you, the Support button funds continued development.
+                        AT-D878UV. It stores your whole codeplug in an open SQLite database, so
+                        Zones, Scan Lists, Group Lists and Roaming Zones stay linked by identity
+                        and survive reorganizing your channels. If it's useful to you, the
+                        Support button funds continued development.
                     </TextBlock>
                 </StackPanel>
             </Border>
@@ -27,9 +27,19 @@
                 <StackPanel Spacing="6">
                     <TextBlock Text="Zones" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
-                        Browse zones and the channels in each one, imported from your SQLite
-                        codeplug database. Scan lists, group lists, and roaming zones are built
-                        automatically from this zone structure.
+                        Create, rename and delete zones, add or remove channels, and reorder
+                        them. Edit any channel's full field set, with a searchable talkgroup
+                        picker that can create a new talkgroup on the fly.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Scan Lists, Group Lists &amp; Roaming" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        Each is independently editable, the same way Zones are. Scan Lists also
+                        have their own priority-channel, look-back, dropout and dwell settings.
                     </TextBlock>
                 </StackPanel>
             </Border>
@@ -38,9 +48,9 @@
                 <StackPanel Spacing="6">
                     <TextBlock Text="Radio" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
-                        Connects to the AT-D878UV over its USB programming cable. Reading and
-                        writing the codeplug itself is currently done via the command-line tool
-                        (dump / encode / write-codeplug) - a full connected view is planned here.
+                        Connects to the AT-D878UV over its USB programming cable to write the
+                        current codeplug to the radio, or back up the radio's full memory to a
+                        file, with live progress.
                     </TextBlock>
                 </StackPanel>
             </Border>
