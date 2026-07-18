@@ -24,6 +24,13 @@ public sealed partial class RadioPage : Page
     private readonly DispatcherQueue _uiQueue;
     private bool _operationInProgress;
     private bool _radioSettling;
+    // Whether a radio has actually answered on the currently-selected port (Test Connection,
+    // Auto-Detect, or a prior write/backup/sample run's own identify step all set this) - NOT the
+    // same as a port merely being selected. RefreshPorts() auto-selects whatever COM port happens
+    // to exist at launch (which may not even be this radio, or may be unplugged/unpowered), so
+    // gating on port-selection alone would still show Write/Backup/Contribute as ready before
+    // anything has actually confirmed a radio is there.
+    private bool _connected;
     private string? _lastDiagnosticsSession;
     private string? _lastWriteSessionFolder;
     private string? _lastWritePort;
@@ -39,6 +46,9 @@ public sealed partial class RadioPage : Page
         this.NavigationCacheMode = Microsoft.UI.Xaml.Navigation.NavigationCacheMode.Enabled;
         _uiQueue = DispatcherQueue.GetForCurrentThread();
         RefreshPorts();
+        // Write/Backup/Contribute default to IsEnabled="True" in XAML - without this call they'd
+        // show as ready on first launch, before anything has confirmed a radio is connected.
+        UpdateButtonStates();
     }
 
     private void OnRefreshClicked(object sender, RoutedEventArgs e) => RefreshPorts();
@@ -56,6 +66,14 @@ public sealed partial class RadioPage : Page
             PortComboBox.SelectedIndex = 0;
     }
 
+    // A previously-confirmed connection doesn't carry over to a newly (or differently) selected
+    // port - only Test Connection/Auto-Detect/a successful operation on THIS port can confirm one.
+    private void OnPortSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_connected) return;
+        SetConnectionStatus(false, "Not connected.");
+    }
+
     private string? SelectedPort => PortComboBox.SelectedItem as string;
 
     private void Log(string message)
@@ -67,21 +85,25 @@ public sealed partial class RadioPage : Page
         });
     }
 
-    /// <summary>Enables/disables every button that opens a session on the radio. Gated on both
+    /// <summary>Enables/disables every button that opens a session on the radio. Gated on
     /// _operationInProgress (an operation is actively running) and _radioSettling (the radio just
     /// ended a session - even a read-only one like Test Connection - and is mid drop-off/
-    /// re-enumerate, so a new session opened right now would fail). RefreshButton and the port
-    /// picker are exempt since they never touch the radio.</summary>
+    /// re-enumerate, so a new session opened right now would fail) for all of them. Write/Backup/
+    /// Contribute additionally require _connected - on first launch (or after switching ports)
+    /// nothing has confirmed a radio is actually there yet, so they start disabled until Test
+    /// Connection or Auto-Detect succeeds, rather than looking "ready" when they're not. Test
+    /// Connection, Auto-Detect, and RefreshButton stay exempt from the _connected requirement
+    /// since they're how a connection gets confirmed in the first place.</summary>
     private void UpdateButtonStates()
     {
         _uiQueue.TryEnqueue(() =>
         {
             var enabled = !_operationInProgress && !_radioSettling;
             TestConnectionButton.IsEnabled = enabled;
-            WriteCodeplugButton.IsEnabled = enabled;
-            BackupButton.IsEnabled = enabled;
-            ContributeSampleButton.IsEnabled = enabled;
             AutoDetectButton.IsEnabled = enabled;
+            WriteCodeplugButton.IsEnabled = enabled && _connected;
+            BackupButton.IsEnabled = enabled && _connected;
+            ContributeSampleButton.IsEnabled = enabled && _connected;
             SendReportButton.IsEnabled = enabled && _lastDiagnosticsSession is not null;
             RestoreButton.IsEnabled = enabled && _lastWriteSessionFolder is not null;
             RefreshButton.IsEnabled = !_operationInProgress;
@@ -113,6 +135,8 @@ public sealed partial class RadioPage : Page
     /// several a user owns, is currently connected and on which port).</summary>
     private void SetConnectionStatus(bool connected, string text)
     {
+        _connected = connected;
+        UpdateButtonStates();
         _uiQueue.TryEnqueue(() =>
         {
             ConnectionDot.Fill = connected ? ConnectedBrush : NotConnectedBrush;

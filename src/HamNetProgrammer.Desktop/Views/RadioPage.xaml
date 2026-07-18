@@ -20,7 +20,7 @@
                 <StackPanel Spacing="8">
                     <TextBlock Text="Connection" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <ComboBox x:Name="PortComboBox" Width="160" PlaceholderText="Select port" />
+                        <ComboBox x:Name="PortComboBox" Width="160" PlaceholderText="Select port" SelectionChanged="OnPortSelectionChanged" />
                         <Button x:Name="RefreshButton" Content="Refresh Ports" Click="OnRefreshClicked" />
                         <Button x:Name="AutoDetectButton" Content="Auto-Detect Radio" Click="OnAutoDetectClicked"
                                 ToolTipService.ToolTip="Tries each free serial port for the AT-D878UV's handshake response. Ports already open in another program are skipped." />
