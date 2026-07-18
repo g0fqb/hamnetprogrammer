@@ -276,6 +276,18 @@ public sealed partial class RadioPage : Page
                 }
 
                 using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+
+                using (var zoneCountCmd = db.CreateCommand())
+                {
+                    zoneCountCmd.CommandText = "SELECT COUNT(*), SUM(IsActive) FROM Zones;";
+                    using var zoneCountReader = zoneCountCmd.ExecuteReader();
+                    zoneCountReader.Read();
+                    var totalZones = zoneCountReader.GetInt32(0);
+                    var activeZones = zoneCountReader.IsDBNull(1) ? 0 : zoneCountReader.GetInt32(1);
+                    Log($"{activeZones}/{totalZones} zones active - only active zones are written.");
+                    auditLog.LogNote($"{activeZones}/{totalZones} zones active.");
+                }
+
                 var regions = AnyToneD878CodeplugEncoder.Build(db);
                 var totalBytes = regions.Sum(r => (long)r.Data.Length);
                 Log($"Encoded {regions.Count} regions, {totalBytes:N0} bytes to write.");

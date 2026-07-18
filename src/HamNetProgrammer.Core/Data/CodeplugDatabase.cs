@@ -16,9 +16,13 @@ public static class CodeplugDatabase
     private const string Schema = """
         PRAGMA foreign_keys = ON;
 
+        -- IsActive controls whether a zone is included the next time the codeplug is written to the
+        -- radio - lets a zone be parked (e.g. "Home" while travelling with only a "Travel" zone
+        -- active) without deleting it. Defaults to active so existing zones are unaffected.
         CREATE TABLE IF NOT EXISTS Zones (
             Id INTEGER PRIMARY KEY,
-            Name TEXT NOT NULL UNIQUE
+            Name TEXT NOT NULL UNIQUE,
+            IsActive INTEGER NOT NULL DEFAULT 1
         );
 
         -- Priority/timing/revert fields per the AT-D878UV scan list record layout (confirmed against
@@ -170,6 +174,11 @@ public static class CodeplugDatabase
         ("RevertMode", "TEXT NULL"),
     ];
 
+    private static readonly (string Column, string Definition)[] ZoneMigrationColumns =
+    [
+        ("IsActive", "INTEGER NOT NULL DEFAULT 1"),
+    ];
+
     public static SqliteConnection OpenOrCreate(string path)
     {
         var connection = new SqliteConnection($"Data Source={path}");
@@ -179,26 +188,30 @@ public static class CodeplugDatabase
             cmd.CommandText = Schema;
             cmd.ExecuteNonQuery();
         }
-        MigrateScanListColumns(connection);
+        MigrateColumns(connection, "ScanLists", ScanListMigrationColumns);
+        MigrateColumns(connection, "Zones", ZoneMigrationColumns);
         return connection;
     }
 
-    private static void MigrateScanListColumns(SqliteConnection connection)
+    // CREATE TABLE IF NOT EXISTS won't add new columns to a table that already exists (like the
+    // working codeplug.db), so any column added after a table's initial release needs this
+    // explicit, idempotent ADD COLUMN pass.
+    private static void MigrateColumns(SqliteConnection connection, string table, (string Column, string Definition)[] columns)
     {
         var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var pragmaCmd = connection.CreateCommand())
         {
-            pragmaCmd.CommandText = "PRAGMA table_info(ScanLists);";
+            pragmaCmd.CommandText = $"PRAGMA table_info({table});";
             using var reader = pragmaCmd.ExecuteReader();
             while (reader.Read())
                 existingColumns.Add(reader.GetString(1));
         }
 
-        foreach (var (column, definition) in ScanListMigrationColumns)
+        foreach (var (column, definition) in columns)
         {
             if (existingColumns.Contains(column)) continue;
             using var alterCmd = connection.CreateCommand();
-            alterCmd.CommandText = $"ALTER TABLE ScanLists ADD COLUMN {column} {definition};";
+            alterCmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
             alterCmd.ExecuteNonQuery();
         }
     }

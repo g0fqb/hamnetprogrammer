@@ -153,8 +153,10 @@ public static class AnyToneD878CodeplugEncoder
         var namesBuffer = new byte[250 * 32];
         var usedBuffer = new byte[32];
 
+        // Only active zones are written - see the Zones.IsActive remarks in CodeplugDatabase for why
+        // (parking a zone, e.g. "Home" while a "Travel" zone is active, without deleting it).
         using var zonesCmd = db.CreateCommand();
-        zonesCmd.CommandText = "SELECT Id, Name FROM Zones ORDER BY Id;";
+        zonesCmd.CommandText = "SELECT Id, Name FROM Zones WHERE IsActive = 1 ORDER BY Id;";
         using var zonesReader = zonesCmd.ExecuteReader();
 
         var zoneIndex = 0;

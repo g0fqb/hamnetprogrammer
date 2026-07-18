@@ -9,6 +9,7 @@ namespace HamNetProgrammer.Desktop.Views;
 public sealed partial class ZonesPage : Page
 {
     public sealed record ChannelRow(long ChannelId, int Position, string Name, string FrequencyMHz, string TalkGroup, string ColorCodeSlot);
+    public sealed record ZoneRow(string Name, bool IsActive);
 
     public ZonesPage()
     {
@@ -16,7 +17,7 @@ public sealed partial class ZonesPage : Page
         LoadZones();
     }
 
-    private string? SelectedZoneName => ZoneListView.SelectedItem as string;
+    private string? SelectedZoneName => (ZoneListView.SelectedItem as ZoneRow)?.Name;
 
     private void LoadZones(string? selectZoneName = null)
     {
@@ -24,23 +25,24 @@ public sealed partial class ZonesPage : Page
         {
             using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
             using var cmd = db.CreateCommand();
-            cmd.CommandText = "SELECT Name FROM Zones ORDER BY Name;";
+            cmd.CommandText = "SELECT Name, IsActive FROM Zones ORDER BY Name;";
             using var reader = cmd.ExecuteReader();
 
-            var names = new List<string>();
+            var rows = new List<ZoneRow>();
             while (reader.Read())
-                names.Add(reader.GetString(0));
+                rows.Add(new ZoneRow(reader.GetString(0), reader.GetInt64(1) != 0));
 
-            ZoneListView.ItemsSource = names;
+            ZoneListView.ItemsSource = rows;
 
             using var countCmd = db.CreateCommand();
             countCmd.CommandText = "SELECT COUNT(*) FROM Channels;";
             var totalChannels = Convert.ToInt32(countCmd.ExecuteScalar());
-            SummaryText.Text = $"{names.Count} zones, {totalChannels} channels ({AppPaths.CodeplugDbPath})";
+            var activeCount = rows.Count(r => r.IsActive);
+            SummaryText.Text = $"{rows.Count} zones ({activeCount} active), {totalChannels} channels ({AppPaths.CodeplugDbPath})";
 
-            if (names.Count > 0)
+            if (rows.Count > 0)
             {
-                var indexToSelect = selectZoneName is not null ? names.IndexOf(selectZoneName) : 0;
+                var indexToSelect = selectZoneName is not null ? rows.FindIndex(r => r.Name == selectZoneName) : 0;
                 ZoneListView.SelectedIndex = indexToSelect >= 0 ? indexToSelect : 0;
             }
             else
@@ -51,6 +53,27 @@ public sealed partial class ZonesPage : Page
         catch (Exception ex)
         {
             SummaryText.Text = $"Could not open codeplug database: {ex.Message}";
+        }
+    }
+
+    private void OnZoneActiveToggled(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox { Tag: string zoneName } checkBox) return;
+
+        try
+        {
+            using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "UPDATE Zones SET IsActive = $active WHERE Name = $name;";
+            cmd.Parameters.Add(new SqliteParameter("$active", checkBox.IsChecked == true ? 1 : 0));
+            cmd.Parameters.Add(new SqliteParameter("$name", zoneName));
+            cmd.ExecuteNonQuery();
+
+            LoadZones(zoneName);
+        }
+        catch (Exception ex)
+        {
+            SummaryText.Text = $"Could not update zone: {ex.Message}";
         }
     }
 

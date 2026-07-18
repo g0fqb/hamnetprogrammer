@@ -31,7 +31,12 @@
                     <ListView x:Name="ZoneListView" SelectionChanged="OnZoneSelectionChanged" Padding="4">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding}" FontFamily="Consolas" Padding="8,6" />
+                                <StackPanel Orientation="Horizontal" Padding="4,4" Spacing="6">
+                                    <CheckBox IsChecked="{Binding IsActive}" Tag="{Binding Name}"
+                                              Click="OnZoneActiveToggled"
+                                              ToolTipService.ToolTip="Active zones are written to the radio; inactive ones are parked and skipped." />
+                                    <TextBlock Text="{Binding Name}" FontFamily="Consolas" VerticalAlignment="Center" />
+                                </StackPanel>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
