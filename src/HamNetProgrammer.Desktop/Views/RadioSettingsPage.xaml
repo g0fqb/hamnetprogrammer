@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page x:Class="HamNetProgrammer.Desktop.Views.RadioSettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Background="#10161d">
+
+    <Grid Padding="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
+            <TextBlock Text="Radio Settings" FontSize="22" FontWeight="Bold" Foreground="#e0924a" VerticalAlignment="Center" />
+            <TextBlock x:Name="SummaryText" FontSize="12" Foreground="#8896a0" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <ScrollViewer Grid.Row="0">
+                <Border Background="#1a232c" CornerRadius="6" Padding="20" MaxWidth="640" HorizontalAlignment="Left">
+                    <StackPanel x:Name="FormPanel" Spacing="10" />
+                </Border>
+            </ScrollViewer>
+
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+                <Button x:Name="SaveButton" Content="Save" Click="OnSaveClicked" Background="#e0924a" Foreground="#10161d" FontWeight="SemiBold" />
+                <TextBlock x:Name="StatusText" FontSize="12" Foreground="#6bb0b8" VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Page>
