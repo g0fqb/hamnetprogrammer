@@ -5,6 +5,7 @@ using HamNetProgrammer.Core.Import;
 using HamNetProgrammer.Core.Online;
 using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
+using HamNetProgrammer.Core.Radios.TyT;
 
 if (args.Length > 0 && args[0].Equals("import", StringComparison.OrdinalIgnoreCase))
     return RunImport(args.Skip(1).ToArray());
@@ -38,6 +39,12 @@ if (args.Length > 0 && args[0].Equals("write-codeplug", StringComparison.Ordinal
 
 if (args.Length > 0 && args[0].Equals("lookup-dmrid", StringComparison.OrdinalIgnoreCase))
     return await RunLookupDmrId(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("tyt-identify", StringComparison.OrdinalIgnoreCase))
+    return RunTytIdentify();
+
+if (args.Length > 0 && args[0].Equals("tyt-dump", StringComparison.OrdinalIgnoreCase))
+    return RunTytDump(args.Skip(1).ToArray());
 
 var peekAddressArg = args.FirstOrDefault(a => a.StartsWith("peek=", StringComparison.OrdinalIgnoreCase));
 var pokeArg = args.FirstOrDefault(a => a.StartsWith("poke=", StringComparison.OrdinalIgnoreCase));
@@ -247,6 +254,90 @@ static int RunWriteCodeplug(string[] writeArgs)
         Console.WriteLine("Ending programming session (this commits the write - device will drop off USB and re-enumerate in ~10-15s)...");
         radio.EndProgrammingSession();
         Console.WriteLine("Done.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+// Smoke test for TytDfuTransport against real hardware, before any of this is wired into the
+// desktop UI. Requires the radio to already be in DFU/bootloader mode (button-and-power-on
+// combo, model-specific) and, on Windows, bound to a WinUSB driver rather than its default one.
+static int RunTytIdentify()
+{
+    if (!TytDfuTransport.AnyDeviceConnected())
+    {
+        Console.WriteLine($"No device found presenting the DFU interface (VID {TytDfuTransport.VendorId:x4}:PID {TytDfuTransport.ProductId:x4}).");
+        Console.WriteLine("Put the radio into DFU/bootloader mode (button-and-power-on combo) and check Windows has it bound to a WinUSB driver (see Zadig), then try again.");
+        return 1;
+    }
+
+    using var radio = new TytDfuTransport();
+    try
+    {
+        Console.WriteLine("DFU device found - opening...");
+        radio.Open();
+        Console.WriteLine("Entering programming mode...");
+        radio.EnterProgramMode();
+        var id = radio.Identify();
+        Console.WriteLine($"Device identifier: '{id}'");
+        Console.WriteLine("Rebooting radio back to normal mode...");
+        radio.Reboot();
+        Console.WriteLine("Done.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+// Reads the MD-380/MD-390's single known codeplug segment (per qdmr's md390_codeplug.hh -
+// there's no separate MD-380 class in qdmr at all, meaning the DR780/MD-380 and MD-390 are
+// documented as sharing the identical layout) to a raw .bin file, for offline inspection against
+// qdmr's documented byte layout - read-only, no write/erase involved. A DM-1701 or other
+// TyT-family model would need different addresses (see dm1701_codeplug.hh's two-segment layout).
+static int RunTytDump(string[] dumpArgs)
+{
+    var outputPath = dumpArgs.Length > 0
+        ? dumpArgs[0]
+        : Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "dumps", $"tyt_{DateTime.Now:yyyyMMdd_HHmmss}.bin");
+    outputPath = Path.GetFullPath(outputPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+
+    (uint Start, uint End)[] segments = [(0x002000, 0x040000)];
+    const int chunkSize = 1024;
+
+    using var radio = new TytDfuTransport();
+    try
+    {
+        Console.WriteLine("Opening DFU device...");
+        radio.Open();
+        radio.EnterProgramMode();
+        var id = radio.Identify();
+        Console.WriteLine($"Device identifier: '{id}'");
+
+        using var output = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
+        var buffer = new byte[chunkSize];
+        foreach (var (start, end) in segments)
+        {
+            Console.WriteLine($"Reading 0x{start:x6}-0x{end:x6}...");
+            for (var address = start; address < end; address += chunkSize)
+            {
+                radio.Read(address, buffer, chunkSize);
+                output.Write(buffer, 0, chunkSize);
+                if ((address - start) % (chunkSize * 64) == 0)
+                    Console.WriteLine($"  0x{address:x6} ({(address - start) * 100 / (end - start)}%)");
+            }
+        }
+
+        Console.WriteLine("Rebooting radio back to normal mode...");
+        radio.Reboot();
+        Console.WriteLine($"Done. Saved to {outputPath}");
         return 0;
     }
     catch (Exception ex)

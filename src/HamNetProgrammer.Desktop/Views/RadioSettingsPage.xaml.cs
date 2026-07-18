@@ -13,11 +13,12 @@ namespace HamNetProgrammer.Desktop.Views;
 /// tabs layout too closely. GPS &amp; APRS is the first section; more (General/Display/Keys etc.)
 /// are planned as additional headed sections on this same page.
 ///
-/// Database-only for now: no "Write to Radio" path yet. The AT-D878UV's documented byte layout for
-/// this region has real ambiguity in places and shares a flash erase block with data implicated in
-/// a past incident (see project notes) - wiring this to the radio write path needs the exact
-/// offsets hardware-verified first, the same way ScanListRecordCodec's layout was cross-checked
-/// against two independent sources before being trusted.
+/// Most of GPS/APRS IS written to the radio (see AnyToneD878CodeplugEncoder.EncodeRadioSettings) -
+/// three fields are the exception (GPS Mode, APRS Sending Text, GPS Template Text), each labeled
+/// "(not written to radio yet)" below: no independently-confirmed byte offset exists for them on
+/// the D878UV specifically in either reference source checked, so they're saved to the database
+/// but deliberately left unwritten rather than risk an unverified flash offset (see the past
+/// incident in project notes for why that risk is taken seriously here).
 /// </summary>
 public sealed partial class RadioSettingsPage : Page
 {
@@ -168,7 +169,9 @@ public sealed partial class RadioSettingsPage : Page
 
         FormPanel.Children.Add(FormField.SectionHeader("GPS"));
         FormPanel.Children.Add(FormField.Row("GPS", _gpsEnabledBox!, "Turns the radio's built-in GPS receiver on or off."));
-        FormPanel.Children.Add(FormField.Row("GPS Mode", _gpsModeCombo!, "Which satellite system(s) the GPS receiver uses. GPS+BDS gives better coverage in parts of Asia at the cost of slightly higher power use."));
+        FormPanel.Children.Add(FormField.Row("GPS Mode (not written to radio yet)", _gpsModeCombo!,
+            "Which satellite system(s) the GPS receiver uses. GPS+BDS gives better coverage in parts of Asia at the cost of slightly higher power use. " +
+            "Saved here, but NOT currently written to the radio - no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
 
         FormPanel.Children.Add(FormField.SectionHeader("APRS"));
         FormPanel.Children.Add(FormField.Row("Report Type", _aprsReportTypeCombo!, "Off disables APRS reporting. Digital sends your position over a DMR talkgroup (the common choice for a hotspot). Analog transmits real APRS packets on an FM frequency."));
@@ -197,8 +200,12 @@ public sealed partial class RadioSettingsPage : Page
         FormPanel.Children.Add(FormField.Row("Longitude", lonRow, "Degrees, minutes, and E/W for the fixed position."));
 
         FormPanel.Children.Add(FormField.SectionHeader("Text"));
-        FormPanel.Children.Add(FormField.Row("APRS Sending Text", _sendingTextBox!, "Free text appended to your outgoing APRS report, e.g. a comment or status."));
-        FormPanel.Children.Add(FormField.Row("GPS Template Text", _gpsTemplateBox!, "Text shown on the radio's display alongside a GPS fix."));
+        FormPanel.Children.Add(FormField.Row("APRS Sending Text (not written to radio yet)", _sendingTextBox!,
+            "Free text appended to your outgoing APRS report, e.g. a comment or status. Saved here, but NOT currently written to the radio - " +
+            "no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
+        FormPanel.Children.Add(FormField.Row("GPS Template Text (not written to radio yet)", _gpsTemplateBox!,
+            "Text shown on the radio's display alongside a GPS fix. Saved here, but NOT currently written to the radio - " +
+            "no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
     }
 
     private void OnSaveClicked(object sender, RoutedEventArgs e)

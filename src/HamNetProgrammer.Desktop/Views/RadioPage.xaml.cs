@@ -80,6 +80,7 @@ public sealed partial class RadioPage : Page
             TestConnectionButton.IsEnabled = enabled;
             WriteCodeplugButton.IsEnabled = enabled;
             BackupButton.IsEnabled = enabled;
+            ContributeSampleButton.IsEnabled = enabled;
             AutoDetectButton.IsEnabled = enabled;
             SendReportButton.IsEnabled = enabled && _lastDiagnosticsSession is not null;
             RestoreButton.IsEnabled = enabled && _lastWriteSessionFolder is not null;
@@ -811,5 +812,164 @@ public sealed partial class RadioPage : Page
         {
             SetComplete(false, result.Message);
         }
+    }
+
+    /// <summary>Captures the same read-only region dump used for Backup/pre-write baselines and
+    /// uploads it to the shared backend as a research sample - never issues a WriteMemory call.
+    /// Most useful against a radio we have no hardware access to validate against (D868UV/D578UV/
+    /// D890UV etc.): reading the AT-D878UV's known region list against unknown firmware is a cheap
+    /// way to see what does and doesn't line up, without needing that model's layout up front.</summary>
+    private async void OnContributeSampleClicked(object sender, RoutedEventArgs e)
+    {
+        if (_operationInProgress) return;
+        if (SelectedPort is not { } port)
+        {
+            SetComplete(false, "Select a port first.");
+            return;
+        }
+
+        SetBusy(true, "Identifying radio...");
+        Log($"Opening {port} to identify the radio...");
+
+        string deviceId;
+        try
+        {
+            deviceId = await Task.Run(() =>
+            {
+                using var radio = new AnyToneD878Transport(port);
+                radio.Open();
+                try
+                {
+                    radio.StartProgrammingSession();
+                    var id = radio.ReadDeviceId();
+                    radio.EndProgrammingSession();
+                    return id;
+                }
+                finally
+                {
+                    radio.Close();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"Error identifying device: {ex.Message}");
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, $"Could not identify device: {ex.Message}");
+            SetBusy(false);
+            return;
+        }
+
+        var profile = RadioRiskCatalog.Lookup(deviceId);
+        SetConnectionStatus(true, DescribeDevice(deviceId, port));
+        SetBusy(false);
+
+        var notesBox = new TextBox
+        {
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            Height = 70,
+            PlaceholderText = "Anything worth knowing - firmware version, what you were doing when this radio behaved oddly, etc. (optional)",
+        };
+        var contactBox = new TextBox { PlaceholderText = "Contact email, if you're OK being followed up with (optional)" };
+        var panel = new StackPanel { Spacing = 10, MaxWidth = 440 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Detected: {profile.ModelLabel} ({deviceId})",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 12,
+            Text = "This only reads memory - the same read-only operation Backup uses - and never sends a write command, so it cannot change your radio's configuration. The raw dump gets uploaded to help extend support to this model. We haven't tested this against your specific radio before, so if anything about the read looks wrong (errors, timeouts) it will just be logged, not retried destructively.",
+        });
+        panel.Children.Add(notesBox);
+        panel.Children.Add(contactBox);
+
+        var confirm = new ContentDialog
+        {
+            Title = "Contribute Memory Sample",
+            Content = panel,
+            PrimaryButtonText = "Read and Upload",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot,
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var safeDeviceId = string.Join("_", deviceId.Split(Path.GetInvalidFileNameChars()));
+        var sessionFolder = Path.Combine(AppPaths.DiagnosticsDirectory, $"{stamp}_sample_{safeDeviceId}");
+        Directory.CreateDirectory(sessionFolder);
+        var toolVersion = typeof(RadioPage).Assembly.GetName().Version?.ToString() ?? "dev";
+
+        SetBusy(true, "Reading radio memory for sample...");
+        Log($"Reading known regions from {profile.ModelLabel} ({deviceId})...");
+
+        var readResult = await Task.Run(() =>
+        {
+            try
+            {
+                using var radio = new AnyToneD878Transport(port);
+                radio.Open();
+                radio.StartProgrammingSession();
+                radio.ReadDeviceId();
+                var results = AnyToneD878MemoryDumper.Dump(radio,
+                    Path.Combine(sessionFolder, "sample.bin"), Path.Combine(sessionFolder, "sample.manifest.csv"),
+                    (region, index, total) =>
+                    {
+                        SetProgress(index, total, $"Reading... [{index}/{total}] {region.Name}");
+                        if (index % 40 == 0 || index == total) Log($"  [{index}/{total}] {region.Name}");
+                    });
+                radio.EndProgrammingSession();
+                var failed = results.Count(r => !r.Succeeded);
+                Log($"Read complete: {results.Count} regions, {failed} failed to respond (expected - this model's layout is unverified).");
+                return (Success: true, Message: (string?)null);
+            }
+            catch (Exception ex)
+            {
+                Log($"Error: {ex.Message}");
+                return (Success: false, Message: ex.Message);
+            }
+        });
+
+        SetBusy(false);
+        if (!readResult.Success)
+        {
+            SetComplete(false, $"Read failed: {readResult.Message}");
+            await WatchRadioSettleAsync(port);
+            return;
+        }
+
+        // Upload doesn't touch the radio at all - do it before the settle-wait, not after, the
+        // same order Backup already uses. Waiting for the radio first was a real bug: the settle
+        // watch posts its own "Radio ready" completion message, which looked like the operation
+        // had finished and buried the real upload-completion message that came after it.
+        SetBusy(true, "Uploading sample...");
+        Log("Packaging and uploading memory sample...");
+        try
+        {
+            var zipPath = DiagnosticPackager.CreateZip(sessionFolder);
+            await RadioSampleUploader.UploadAsync(zipPath, profile.ModelLabel, deviceId, toolVersion, contactBox.Text, notesBox.Text);
+            Log("Memory sample uploaded - thank you.");
+            SetComplete(true, "Memory sample uploaded - thank you.");
+
+            var thanksDialog = new ContentDialog
+            {
+                Title = "Thank You",
+                Content = "Your memory-map sample has been uploaded. It'll be reviewed, and used to help extend real support to this radio model in due course.",
+                CloseButtonText = "OK",
+                XamlRoot = this.XamlRoot,
+            };
+            await thanksDialog.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to upload sample: {ex.Message}");
+            SetComplete(false, $"Failed to upload sample: {ex.Message}");
+        }
+        SetBusy(false);
+        await WatchRadioSettleAsync(port);
     }
 }

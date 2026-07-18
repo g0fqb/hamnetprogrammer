@@ -49,6 +49,15 @@
 
             <Border Background="#1a232c" CornerRadius="6" Padding="14">
                 <StackPanel Spacing="8">
+                    <TextBlock Text="Contribute a memory-map sample" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                    <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                               Text="Read-only - never writes anything to the radio. Helps extend support to other AnyTone-family models we don't own by capturing what's actually at each known memory address. Most useful if your radio isn't a D878UV." />
+                    <Button x:Name="ContributeSampleButton" Content="Contribute Memory Sample" Click="OnContributeSampleClicked" />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                <StackPanel Spacing="8">
                     <TextBlock Text="Restore previous codeplug" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                     <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
                                Text="Available right after a Write Codeplug run that actually reached the radio. Writes back exactly what that write overwrote, from the automatic backup taken just before it - a way to back out if something looks wrong." />

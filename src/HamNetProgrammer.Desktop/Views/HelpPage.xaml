@@ -46,11 +46,64 @@
 
             <Border Background="#1a232c" CornerRadius="8" Padding="16">
                 <StackPanel Spacing="6">
+                    <TextBlock Text="Contacts" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        Digital talkgroups. Import pulls a shared, pre-merged list (Brandmeister,
+                        TGIF and FreeDMR combined and deduped by number - the radio has no concept
+                        of "network", so the same talkgroup number is always one contact, not
+                        several) from our backend, so every install stays consistent. Search finds
+                        any imported or manually-created contact by name or number.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Lists" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        Turns Scan Lists, Group Lists and Roaming Zones on or off as a whole - if a
+                        feature is off here, it's not written to the radio at all, rather than
+                        written empty. "Sync Lists with Zones" automatically derives Scan/Group
+                        Lists and Roaming Zones from your current zone membership on every write,
+                        instead of maintaining them by hand.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Radio Settings" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        GPS and APRS (Digital reporting via a DMR talkgroup). Most fields here are
+                        written to the radio on the next Write Codeplug; any field labeled
+                        "(not written to radio yet)" is saved for your own reference but
+                        deliberately left alone on write - no independently-confirmed byte offset
+                        exists for it yet, and this tool would rather leave a setting unwritten
+                        than guess at an unverified flash location.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="6">
                     <TextBlock Text="Radio" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
-                        Connects to the AT-D878UV over its USB programming cable to write the
-                        current codeplug to the radio, or back up the radio's full memory to a
-                        file, with live progress.
+                        Connects to the AT-D878UV over its USB programming cable.
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,0">
+                        <Run Text="Write Codeplug to Radio" FontWeight="SemiBold" Foreground="#dce6ea" /> writes the current codeplug, with live progress. A full memory backup is taken automatically just before, and again just after, so nothing is at risk without a way back.
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        <Run Text="Backup Radio Memory" FontWeight="SemiBold" Foreground="#dce6ea" /> reads every known memory region to a timestamped file - safe, read-only, independent of writing.
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        <Run Text="Contribute a Memory-Map Sample" FontWeight="SemiBold" Foreground="#dce6ea" /> is also read-only, but for radios this project has no hardware to validate against (anything other than the AT-D878UV) - it uploads a raw memory capture to help extend real support to that model.
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        <Run Text="Restore Previous Codeplug" FontWeight="SemiBold" Foreground="#dce6ea" /> undoes the last Write Codeplug run, using the automatic backup taken just before it - available right after a write that actually reached the radio.
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        <Run Text="Send Diagnostic Report" FontWeight="SemiBold" Foreground="#dce6ea" /> sends the automatic backup and a log of everything written for investigation, if something looks wrong after a write - no need to attach anything yourself.
                     </TextBlock>
                 </StackPanel>
             </Border>

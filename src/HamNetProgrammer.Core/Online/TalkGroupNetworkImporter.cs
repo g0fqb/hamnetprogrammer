@@ -1,112 +1,52 @@
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace HamNetProgrammer.Core.Online;
 
-public sealed record TalkGroupImportResult(string Network, int Added, int Updated, int Unchanged, IReadOnlyList<string> Warnings);
+public sealed record TalkGroupImportResult(int Added, int Updated, int Unchanged, IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// Imports talkgroup lists from public DMR network APIs into Contacts, deduped strictly by DmrId -
-/// the radio's own TalkGroupList addresses a group call by number alone, with no concept of
-/// "network" anywhere in the format (confirmed: TalkGroupRecordCodec only encodes Name+DmrId), and
-/// which network a call actually reaches is entirely a function of the hotspot's own
-/// configuration, outside the codeplug. Treating "Brandmeister's TG91" and "FreeDMR's TG91" as
-/// different contacts would just waste a TalkGroupList slot on the radio for what is, at the
-/// protocol level, an identical group call target. Whichever import claims a DmrId first keeps it;
-/// a later import of the same number (from this or any other network, or a manually-created
-/// contact) leaves it untouched rather than creating a duplicate. Network is recorded purely as
-/// "where this contact's data came from" provenance, not a merge key - re-running the SAME
-/// network's import later can still refresh a name it previously set, but never overrides a number
-/// claimed by a different source.
+/// Imports the DMR talkgroup list from HamNetProgrammer's shared backend (PacketCluster/Ham Net
+/// Global on Railway), which itself merges Brandmeister, TGIF, and FreeDMR into one list deduped
+/// by DmrId - see the backend's internal/talkgroups package. Every install reads the same
+/// reference this way, rather than each client independently importing from and resolving
+/// overlaps between the three networks itself.
 ///
-/// Three sources chosen for having a real, working, unauthenticated endpoint (confirmed directly,
-/// not assumed from documentation): Brandmeister's own public API needs no key despite some other
-/// operations requiring one; TGIF publishes a plain CSV; FreeDMR's mirror needs an ordinary browser
-/// User-Agent header (blocks the default HttpClient one) but is otherwise open.
+/// Dedup is strictly by DmrId, not (DmrId, Network): the radio's own TalkGroupList addresses a
+/// group call by number alone, with no concept of "network" anywhere in the format (confirmed:
+/// TalkGroupRecordCodec only encodes Name+DmrId), and which network a call actually reaches is
+/// entirely a function of the hotspot's own configuration, outside the codeplug. A DmrId already
+/// present locally (imported before, or manually created) is left untouched rather than
+/// duplicated; Network is recorded purely as "where this contact's data came from" provenance.
 /// </summary>
 public static class TalkGroupNetworkImporter
 {
-    private const string BrandmeisterUrl = "https://api.brandmeister.network/v2/talkgroup";
-    private const string TgifUrl = "https://api.tgif.network/dmr/talkgroups/csv";
-    private const string FreeDmrUrl = "http://downloads.freedmr.uk/downloads/talkgroup_ids.json";
-    private const string BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+    private const string TalkgroupsUrl = "https://api-production-8765.up.railway.app/v1/talkgroups";
 
-    public static async Task<TalkGroupImportResult> ImportBrandmeisterAsync(SqliteConnection db, HttpClient? httpClient = null)
+    private sealed record TalkgroupsResponse(
+        [property: JsonPropertyName("talkgroups")] List<TalkgroupEntry> Talkgroups,
+        [property: JsonPropertyName("count")] int Count);
+
+    private sealed record TalkgroupEntry(
+        [property: JsonPropertyName("dmr_id")] long DmrId,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("network")] string Network);
+
+    public static async Task<TalkGroupImportResult> ImportAsync(SqliteConnection db, HttpClient? httpClient = null)
     {
         var client = httpClient ?? new HttpClient();
         try
         {
-            var json = await client.GetStringAsync(BrandmeisterUrl);
-            using var doc = JsonDocument.Parse(json);
-            var entries = new List<(long DmrId, string Name)>();
-            foreach (var prop in doc.RootElement.EnumerateObject())
-            {
-                if (!long.TryParse(prop.Name, out var dmrId)) continue;
-                var name = prop.Value.GetString();
-                if (string.IsNullOrWhiteSpace(name)) continue;
-                entries.Add((dmrId, name.Trim()));
-            }
-            return ApplyImport(db, "Brandmeister", entries);
-        }
-        finally
-        {
-            if (httpClient is null) client.Dispose();
-        }
-    }
-
-    public static async Task<TalkGroupImportResult> ImportTgifAsync(SqliteConnection db, HttpClient? httpClient = null)
-    {
-        var client = httpClient ?? new HttpClient();
-        try
-        {
-            var csv = await client.GetStringAsync(TgifUrl);
-            var entries = new List<(long DmrId, string Name)>();
-            using var reader = new StringReader(csv);
-            reader.ReadLine(); // header: TG Number,TG Name
-            while (reader.ReadLine() is { } line)
-            {
-                var commaIndex = line.IndexOf(',');
-                if (commaIndex <= 0) continue;
-                var idPart = line[..commaIndex].Trim();
-                var namePart = line[(commaIndex + 1)..].Trim();
-                if (!long.TryParse(idPart, out var dmrId)) continue;
-                if (string.IsNullOrWhiteSpace(namePart)) continue;
-                entries.Add((dmrId, namePart));
-            }
-            return ApplyImport(db, "TGIF", entries);
-        }
-        finally
-        {
-            if (httpClient is null) client.Dispose();
-        }
-    }
-
-    public static async Task<TalkGroupImportResult> ImportFreeDmrAsync(SqliteConnection db, HttpClient? httpClient = null)
-    {
-        var client = httpClient ?? new HttpClient();
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, FreeDmrUrl);
-            // The server blocks HttpClient's default User-Agent (or lack thereof) with a 403 -
-            // confirmed directly, an ordinary browser UA is all it takes.
-            request.Headers.UserAgent.ParseAdd(BrowserUserAgent);
-            using var response = await client.SendAsync(request);
+            using var response = await client.GetAsync(TalkgroupsUrl);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
 
-            using var doc = JsonDocument.Parse(json);
-            var entries = new List<(long DmrId, string Name)>();
-            foreach (var item in doc.RootElement.GetProperty("results").EnumerateArray())
-            {
-                if (!item.TryGetProperty("tgid", out var idProp)) continue;
-                var dmrId = idProp.GetInt64();
-                var name = item.TryGetProperty("callsign", out var nameProp) ? nameProp.GetString() : null;
-                if (string.IsNullOrWhiteSpace(name)) continue;
-                entries.Add((dmrId, name.Trim()));
-            }
-            return ApplyImport(db, "FreeDMR", entries);
+            var parsed = JsonSerializer.Deserialize<TalkgroupsResponse>(json)
+                ?? throw new InvalidOperationException("Empty response from talkgroups endpoint.");
+
+            return ApplyImport(db, parsed.Talkgroups);
         }
         finally
         {
@@ -114,15 +54,18 @@ public static class TalkGroupNetworkImporter
         }
     }
 
-    private static TalkGroupImportResult ApplyImport(SqliteConnection db, string network, IReadOnlyList<(long DmrId, string Name)> entries)
+    private static TalkGroupImportResult ApplyImport(SqliteConnection db, IReadOnlyList<TalkgroupEntry> entries)
     {
         var warnings = new List<string>();
         int added = 0, updated = 0, unchanged = 0;
 
         using var transaction = db.BeginTransaction();
 
-        foreach (var (dmrId, name) in entries)
+        foreach (var entry in entries)
         {
+            if (string.IsNullOrWhiteSpace(entry.Name)) continue;
+            var name = entry.Name.Trim();
+
             long? existingId = null;
             string? existingName = null;
             string? existingNetwork = null;
@@ -130,7 +73,7 @@ public static class TalkGroupNetworkImporter
             {
                 findCmd.Transaction = transaction;
                 findCmd.CommandText = "SELECT Id, Name, Network FROM Contacts WHERE DmrId = $dmrId AND CallType = 'Group' LIMIT 1;";
-                findCmd.Parameters.AddWithValue("$dmrId", dmrId);
+                findCmd.Parameters.AddWithValue("$dmrId", entry.DmrId);
                 using var reader = findCmd.ExecuteReader();
                 if (reader.Read())
                 {
@@ -142,37 +85,48 @@ public static class TalkGroupNetworkImporter
 
             if (existingId is { } id)
             {
-                // A different source (another network, or a manually-created contact) already
-                // claimed this number - leave it alone rather than duplicate or override it.
-                if (existingNetwork != network || existingName == name)
+                // A manually-created contact (Network NULL) already claims this number - leave it.
+                // Otherwise this is just re-running the same import; refresh the name if it changed.
+                if (existingNetwork is null || existingName == name)
                 {
                     unchanged++;
                     continue;
                 }
-                // Re-running THIS network's own import can still refresh a name it previously set.
+                // Disambiguate against Contacts.UNIQUE(Name, CallType) the same way INSERT does -
+                // a refreshed name can collide with a different contact's existing name (e.g. the
+                // upstream data renames this entry to something another row already has).
+                var updateName = NameExists(db, transaction, name, excludingId: id) ? $"{name} (TG{entry.DmrId})" : name;
+
                 using var updateCmd = db.CreateCommand();
                 updateCmd.Transaction = transaction;
-                updateCmd.CommandText = "UPDATE Contacts SET Name = $name WHERE Id = $id;";
-                updateCmd.Parameters.AddWithValue("$name", name);
+                updateCmd.CommandText = "UPDATE Contacts SET Name = $name, Network = $network WHERE Id = $id;";
+                updateCmd.Parameters.AddWithValue("$name", updateName);
+                updateCmd.Parameters.AddWithValue("$network", entry.Network);
                 updateCmd.Parameters.AddWithValue("$id", id);
-                updateCmd.ExecuteNonQuery();
-                updated++;
+                try
+                {
+                    updateCmd.ExecuteNonQuery();
+                    updated++;
+                }
+                catch (SqliteException ex)
+                {
+                    warnings.Add($"Could not update TG{entry.DmrId} '{updateName}': {ex.Message}");
+                }
                 continue;
             }
 
-            // Disambiguate against Contacts.UNIQUE(Name, CallType) for the rarer case of two
-            // different DmrIds sharing an identical display name (confirmed against real data,
-            // not a hypothetical - e.g. TGIF has several distinct "SV2SNH" entries). Appending the
-            // DmrId is guaranteed unique here since we've just confirmed no row already has it.
-            var insertName = NameExists(db, transaction, name) ? $"{name} (TG{dmrId})" : name;
+            // Disambiguate against Contacts.UNIQUE(Name, CallType) for the rare case of two
+            // different DmrIds sharing an identical display name (confirmed against real data -
+            // e.g. TGIF has several distinct "SV2SNH" entries).
+            var insertName = NameExists(db, transaction, name) ? $"{name} (TG{entry.DmrId})" : name;
 
             using (var insertCmd = db.CreateCommand())
             {
                 insertCmd.Transaction = transaction;
                 insertCmd.CommandText = "INSERT INTO Contacts (Name, CallType, DmrId, Network) VALUES ($name, 'Group', $dmrId, $network);";
                 insertCmd.Parameters.AddWithValue("$name", insertName);
-                insertCmd.Parameters.AddWithValue("$dmrId", dmrId);
-                insertCmd.Parameters.AddWithValue("$network", network);
+                insertCmd.Parameters.AddWithValue("$dmrId", entry.DmrId);
+                insertCmd.Parameters.AddWithValue("$network", entry.Network);
                 try
                 {
                     insertCmd.ExecuteNonQuery();
@@ -180,21 +134,24 @@ public static class TalkGroupNetworkImporter
                 }
                 catch (SqliteException ex)
                 {
-                    warnings.Add($"Skipped TG{dmrId} '{insertName}': {ex.Message}");
+                    warnings.Add($"Skipped TG{entry.DmrId} '{insertName}': {ex.Message}");
                 }
             }
         }
 
         transaction.Commit();
-        return new TalkGroupImportResult(network, added, updated, unchanged, warnings);
+        return new TalkGroupImportResult(added, updated, unchanged, warnings);
     }
 
-    private static bool NameExists(SqliteConnection db, SqliteTransaction transaction, string name)
+    private static bool NameExists(SqliteConnection db, SqliteTransaction transaction, string name, long? excludingId = null)
     {
         using var cmd = db.CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandText = "SELECT COUNT(*) FROM Contacts WHERE Name = $name AND CallType = 'Group';";
+        cmd.CommandText = excludingId is null
+            ? "SELECT COUNT(*) FROM Contacts WHERE Name = $name AND CallType = 'Group';"
+            : "SELECT COUNT(*) FROM Contacts WHERE Name = $name AND CallType = 'Group' AND Id != $excludingId;";
         cmd.Parameters.AddWithValue("$name", name);
+        if (excludingId is { } id) cmd.Parameters.AddWithValue("$excludingId", id);
         return Convert.ToInt64(cmd.ExecuteScalar()) > 0;
     }
 }

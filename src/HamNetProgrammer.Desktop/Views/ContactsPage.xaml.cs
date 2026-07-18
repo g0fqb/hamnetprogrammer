@@ -9,10 +9,11 @@ namespace HamNetProgrammer.Desktop.Views;
 
 /// <summary>
 /// Browse/search/import for Contacts (digital talkgroups) - phase 2 of the talkgroup work, after
-/// the ad-hoc create-on-save picker in ChannelEditDialog/TalkGroupPicker. Import buttons pull real
-/// talkgroup lists from Brandmeister/TGIF/FreeDMR's public APIs via TalkGroupNetworkImporter;
-/// search is a live SQL query rather than loading all rows into memory, since a full import across
-/// all three networks is several thousand contacts.
+/// the ad-hoc create-on-save picker in ChannelEditDialog/TalkGroupPicker. The Import button pulls
+/// the shared, pre-merged talkgroup list from our backend (see TalkGroupNetworkImporter) rather
+/// than hitting Brandmeister/TGIF/FreeDMR directly, so every install stays consistent; search is a
+/// live SQL query rather than loading all rows into memory, since a full import is several
+/// thousand contacts.
 /// </summary>
 public sealed partial class ContactsPage : Page
 {
@@ -92,35 +93,24 @@ public sealed partial class ContactsPage : Page
     private void SetBusy(bool busy, string status)
     {
         _busy = busy;
-        ImportBrandmeisterButton.IsEnabled = !busy;
-        ImportTgifButton.IsEnabled = !busy;
-        ImportFreeDmrButton.IsEnabled = !busy;
+        ImportButton.IsEnabled = !busy;
         ImportStatusText.Text = status;
     }
 
-    private async void OnImportBrandmeisterClicked(object sender, RoutedEventArgs e) =>
-        await RunImportAsync("Brandmeister", db => TalkGroupNetworkImporter.ImportBrandmeisterAsync(db));
-
-    private async void OnImportTgifClicked(object sender, RoutedEventArgs e) =>
-        await RunImportAsync("TGIF", db => TalkGroupNetworkImporter.ImportTgifAsync(db));
-
-    private async void OnImportFreeDmrClicked(object sender, RoutedEventArgs e) =>
-        await RunImportAsync("FreeDMR", db => TalkGroupNetworkImporter.ImportFreeDmrAsync(db));
-
-    private async Task RunImportAsync(string network, Func<SqliteConnection, Task<TalkGroupImportResult>> import)
+    private async void OnImportClicked(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
-        SetBusy(true, $"Importing from {network}...");
+        SetBusy(true, "Importing talkgroups...");
 
         try
         {
             var result = await Task.Run(async () =>
             {
                 using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
-                return await import(db);
+                return await TalkGroupNetworkImporter.ImportAsync(db);
             });
 
-            var message = $"{result.Network}: {result.Added} added, {result.Updated} updated, {result.Unchanged} unchanged" +
+            var message = $"{result.Added} added, {result.Updated} updated, {result.Unchanged} unchanged" +
                           (result.Warnings.Count > 0 ? $", {result.Warnings.Count} skipped" : "");
             SetBusy(false, message);
             LoadSummary();
@@ -128,7 +118,7 @@ public sealed partial class ContactsPage : Page
         }
         catch (Exception ex)
         {
-            SetBusy(false, $"Import from {network} failed: {ex.Message}");
+            SetBusy(false, $"Import failed: {ex.Message}");
         }
     }
 }

@@ -54,10 +54,11 @@ public static class CodeplugDatabase
 
         -- Talkgroups today; individual DMR contacts will use the same table once imported.
         -- Network tags which talkgroup network (Brandmeister/TGIF/FreeDMR/etc.) an imported
-        -- contact came from - NULL for manually-created contacts. Talkgroup numbering genuinely
-        -- differs by network, so imports deliberately don't try to merge/dedupe the same DmrId
-        -- across networks (see TalkGroupNetworkImporter) - that would imply a false equivalence
-        -- the ID alone doesn't guarantee.
+        -- contact came from - NULL for manually-created contacts. Purely provenance, not a
+        -- merge key: the radio's own TalkGroupList addresses a group call by DmrId alone, with
+        -- no concept of "network" in the format, so imports dedupe strictly by DmrId regardless
+        -- of source (see TalkGroupNetworkImporter) - whichever import claims a number first
+        -- keeps it.
         CREATE TABLE IF NOT EXISTS Contacts (
             Id INTEGER PRIMARY KEY,
             Name TEXT NOT NULL,
@@ -134,10 +135,14 @@ public static class CodeplugDatabase
         CREATE INDEX IF NOT EXISTS IX_Contacts_DmrId ON Contacts(DmrId);
 
         -- Radio-wide settings (not per-channel/zone) - GPS and APRS for now, more sections planned.
-        -- Single row (Id always 1). Database-only for now: the AT-D878UV's documented byte layout
-        -- for this region is ambiguous in places and shares a flash erase block with data involved
-        -- in a past incident (see project notes) - not wired into the radio write path until the
-        -- exact offsets are hardware-verified.
+        -- Single row (Id always 1). Most fields ARE written to the radio (see
+        -- AnyToneD878CodeplugEncoder.EncodeRadioSettings), which shares a flash erase block with
+        -- data involved in a past incident (see project notes) and is spliced in read-modify-write
+        -- rather than written standalone because of it. GpsMode, AprsSendingText, and
+        -- GpsTemplateText are the exception: no independently-confirmed D878UV byte offset exists
+        -- for them in either reference source checked, so they stay database-only (see
+        -- RadioSettingsPage, which labels them "not written to radio yet" in the UI) rather than
+        -- risk writing to an unverified location.
         CREATE TABLE IF NOT EXISTS RadioSettings (
             Id INTEGER PRIMARY KEY CHECK (Id = 1),
             GpsEnabled INTEGER NULL,
