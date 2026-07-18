@@ -91,7 +91,11 @@ public static class AnyToneD878MemoryMap
         regions.Add(new MemoryRegion("TalkGroupList", 0x02680000, 10000 * 100));
         regions.Add(new MemoryRegion("AnalogAddressBookIndexAndUsed", 0x02900000, 384));
         regions.Add(new MemoryRegion("AnalogAddressBook", 0x02940000, 3072));
-        regions.Add(new MemoryRegion("ReceiveGroupCallList", 0x02980000, 250 * 512));
+        // 250 entries of 512 bytes, named per-slot (matching ScanList's naming) rather than as one
+        // consolidated region, so a restore can match this dump's regions against exactly what
+        // AnyToneD878CodeplugEncoder.EncodeGroupLists writes (also per-slot).
+        for (var n = 0; n < 250; n++)
+            regions.Add(new MemoryRegion($"GroupList[{n + 1}]", 0x02980000u + (uint)(n * 512), 512));
         regions.Add(new MemoryRegion("BootLogo", 0x02ac0000, 40960));
         regions.Add(new MemoryRegion("LocalInformation", 0x02fa0000, 256));
         regions.Add(new MemoryRegion("StandbyBackgroundPicture1", 0x02b00000, 40960));

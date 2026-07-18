@@ -7,13 +7,12 @@ public sealed record EncodedRegion(string Name, uint Address, byte[] Data);
 
 /// <summary>
 /// Builds the AT-D878UV memory write plan from the SQLite codeplug: Channels, Zones (+ names,
-/// used bitmap, default A/B channel), ScanLists (+ used bitmap), Contacts/TalkGroupList
+/// used bitmap, default A/B channel), ScanLists (+ used bitmap), GroupLists, Contacts/TalkGroupList
 /// (+ used bitmap, control data), and RadioIds (+ used bitmap).
 ///
-/// Deliberately scoped to what the zone/scan-list builders actually populate. GroupLists and
-/// RoamingZones are not encoded yet - channels are written with GroupListIndex unset (0xFF/none,
-/// the CPS default), and roaming is a separate structure not referenced by the channel record's
-/// core fields, so omitting it doesn't break anything already written.
+/// RoamingZones are not encoded yet - roaming is a separate structure not referenced by the
+/// channel record's core fields, so omitting it doesn't break anything already written; it's a
+/// deliberate, easy-to-extend gap rather than a correctness issue.
 ///
 /// Channel physical placement uses flat index = ChannelNumber - 1, preserving the user's existing
 /// numbering (including intentional zone-boundary gaps) rather than compacting it away.
@@ -29,10 +28,12 @@ public static class AnyToneD878CodeplugEncoder
         var contactIndex = BuildContactIndex(db);
         var radioIdIndex = BuildRadioIdIndex(db);
         var scanListIndex = BuildScanListIndex(db);
+        var groupListIndex = BuildGroupListIndex(db);
 
-        regions.AddRange(EncodeChannels(db, contactIndex, radioIdIndex, scanListIndex));
+        regions.AddRange(EncodeChannels(db, contactIndex, radioIdIndex, scanListIndex, groupListIndex));
         regions.AddRange(EncodeZones(db));
         regions.AddRange(EncodeScanLists(db));
+        regions.AddRange(EncodeGroupLists(db, contactIndex));
         regions.AddRange(EncodeTalkGroups(db, contactIndex));
         regions.AddRange(EncodeRadioIds(db, radioIdIndex));
 
@@ -76,7 +77,20 @@ public static class AnyToneD878CodeplugEncoder
         return map;
     }
 
-    private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex)
+    // Must match EncodeGroupLists' own ordering/indexing exactly, since channels reference this index.
+    private static Dictionary<long, byte> BuildGroupListIndex(SqliteConnection db)
+    {
+        var map = new Dictionary<long, byte>();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT Id FROM GroupLists ORDER BY Id;";
+        using var reader = cmd.ExecuteReader();
+        byte i = 0;
+        while (reader.Read())
+            map[reader.GetInt64(0)] = i++;
+        return map;
+    }
+
+    private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex, Dictionary<long, byte> groupListIndex)
     {
         var banks = new Dictionary<int, byte[]>();
         int BankLength(int bank) => bank == 31 ? 2176 : ChannelsPerBank * 64;
@@ -109,7 +123,7 @@ public static class AnyToneD878CodeplugEncoder
                 ContactIndex: reader.IsDBNull(9) ? 0 : contactIndex.GetValueOrDefault(reader.GetInt64(9)),
                 RadioIdIndex: reader.IsDBNull(10) ? (byte)0 : radioIdIndex.GetValueOrDefault(reader.GetInt64(10)),
                 ScanListIndex: reader.IsDBNull(11) ? null : scanListIndex.GetValueOrDefault(reader.GetInt64(11)),
-                GroupListIndex: null, // GroupLists aren't encoded yet - CPS default (none) is safe here
+                GroupListIndex: reader.IsDBNull(12) ? null : groupListIndex.GetValueOrDefault(reader.GetInt64(12)),
                 Name: reader.GetString(1));
 
             if (!banks.TryGetValue(bank, out var buffer))
@@ -252,6 +266,46 @@ public static class AnyToneD878CodeplugEncoder
     // Matches AnyToneD878MemoryMap's scanlist addressing: 16 slots per 0x40000-aligned column, 0x200 apart.
     private static uint ScanListAddress(int index0Based) =>
         0x01080000u + (uint)(index0Based / 16 * 0x40000) + (uint)(index0Based % 16 * 0x200);
+
+    // Unlike ScanList/RoamingChannels/PrefabSms, all 250 possible group list slots (250*512=
+    // 0x1F400 bytes) fit inside a single clean 0x40000-aligned erase block with no other named
+    // region sharing it - the same shape as Zones (also 250*512 bytes, already write-tested on
+    // real hardware repeatedly without incident), not the sparse-multi-block pattern those other
+    // sections use. Per the doc, "empty groups will not be written" - only DB rows get a region,
+    // same convention EncodeScanLists already uses, so untouched higher slots are simply left as
+    // whatever was on the radio before (consistent with how ScanLists already behaves).
+    private static IEnumerable<EncodedRegion> EncodeGroupLists(SqliteConnection db, Dictionary<long, uint> contactIndex)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT Id, Name FROM GroupLists ORDER BY Id;";
+        using var reader = cmd.ExecuteReader();
+
+        var index = 0;
+        while (reader.Read())
+        {
+            var groupListId = reader.GetInt64(0);
+            var name = reader.GetString(1);
+
+            using var membersCmd = db.CreateCommand();
+            membersCmd.CommandText = """
+                SELECT c.Id
+                FROM GroupListContacts glc
+                JOIN Contacts c ON c.Id = glc.ContactId
+                WHERE glc.GroupListId = $id
+                ORDER BY glc.Position;
+                """;
+            membersCmd.Parameters.AddWithValue("$id", groupListId);
+            using var membersReader = membersCmd.ExecuteReader();
+            var members = new List<uint>();
+            while (membersReader.Read())
+                members.Add(contactIndex.GetValueOrDefault(membersReader.GetInt64(0)));
+
+            var address = 0x02980000u + (uint)(index * 512);
+            var data = GroupListRecordCodec.Encode(new GroupListRecord(name, members));
+            yield return new EncodedRegion($"GroupList[{index + 1}]", address, data);
+            index++;
+        }
+    }
 
     private static IEnumerable<EncodedRegion> EncodeTalkGroups(SqliteConnection db, Dictionary<long, uint> contactIndex)
     {
