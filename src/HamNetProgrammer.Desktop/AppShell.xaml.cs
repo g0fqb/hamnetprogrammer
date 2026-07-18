@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Shapes;
 using HamNetProgrammer.Desktop.Utils;
 using HamNetProgrammer.Desktop.Views;
 using Windows.System;
@@ -9,16 +10,27 @@ namespace HamNetProgrammer.Desktop;
 
 public class AppShell : Window
 {
+    private static readonly SolidColorBrush NotConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x5a, 0x65, 0x70));
+    private static readonly SolidColorBrush ConnectedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 0x4c, 0xaf, 0x50));
+
     private readonly Frame _contentFrame;
     private readonly NavigationView _navView;
     private readonly Grid _rootGrid;
-    private readonly TextBlock _statusBarText;
+    private readonly Ellipse _connectionDot;
+    private readonly TextBlock _connectionStatusText;
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _uiQueue;
+
+    /// <summary>The single running AppShell instance, so any page can reach the global connection
+    /// indicator without a full navigation/DI service just for this. Set once in the constructor -
+    /// this app only ever creates one AppShell (see App.xaml.cs). Named ActiveInstance rather than
+    /// Current to avoid silently shadowing WinUI's own Window.Current.</summary>
+    public static AppShell? ActiveInstance { get; private set; }
 
     public Frame ContentFrame => _contentFrame;
 
     public AppShell()
     {
+        ActiveInstance = this;
         Title = "HamNetProgrammer";
         this.AppWindow.Resize(new Windows.Graphics.SizeInt32(1200, 800));
         AppIcon.Apply(this);
@@ -66,19 +78,29 @@ public class AppShell : Window
         _navView.Content = contentWrapper;
         _navView.ItemInvoked += OnNavItemInvoked;
 
-        _statusBarText = new TextBlock
+        // Shows which radio (if any) is currently connected and on which port - not a generic
+        // "Ready"/idle placeholder (the previous text here was never actually updated by anything
+        // in the app, which is exactly why it was confusing). Persists across page navigation
+        // since it lives in the shell, not a page - RadioPage calls SetConnectionStatus whenever
+        // it identifies a device. Useful given a user may have more than one radio to choose
+        // between (this app only tracks one active connection at a time, matching RadioPage).
+        _connectionDot = new Ellipse { Width = 8, Height = 8, Fill = NotConnectedBrush, VerticalAlignment = VerticalAlignment.Center };
+        _connectionStatusText = new TextBlock
         {
             FontSize = 11,
             Foreground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x88, 0x96, 0xa0)),
             FontFamily = new FontFamily("Consolas"),
             VerticalAlignment = VerticalAlignment.Center,
-            Text = "Ready",
+            Text = "Not connected.",
         };
+        var statusBarContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        statusBarContent.Children.Add(_connectionDot);
+        statusBarContent.Children.Add(_connectionStatusText);
         var statusBar = new Border
         {
             Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x1a, 0x23, 0x2c)),
             Padding = new Thickness(12, 4, 12, 4),
-            Child = _statusBarText,
+            Child = statusBarContent,
         };
         Grid.SetRow(statusBar, 1);
 
@@ -89,7 +111,11 @@ public class AppShell : Window
         this.Content = _rootGrid;
     }
 
-    public void SetStatus(string message) => _uiQueue.TryEnqueue(() => _statusBarText.Text = message);
+    public void SetConnectionStatus(bool connected, string text) => _uiQueue.TryEnqueue(() =>
+    {
+        _connectionDot.Fill = connected ? ConnectedBrush : NotConnectedBrush;
+        _connectionStatusText.Text = text;
+    });
 
     private static UIElement BuildDonateButton()
     {

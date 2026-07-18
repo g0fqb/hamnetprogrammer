@@ -4,6 +4,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using HamNetProgrammer.Desktop;
 using HamNetProgrammer.Core.Data;
 using HamNetProgrammer.Core.Diagnostics;
 using HamNetProgrammer.Core.Planning;
@@ -90,8 +91,10 @@ public sealed partial class RadioPage : Page
         });
     }
 
-    /// <summary>Sets the persistent connection indicator (dot + text) at the bottom of the page -
-    /// distinct from OperationStatusText, which reports what the last/current operation did.</summary>
+    /// <summary>Sets the connection indicator (dot + text) both on this page and in the app
+    /// shell's global status bar - the shell's copy is what stays visible after navigating away
+    /// from Radio, since connection state is meaningful app-wide (which radio, of possibly
+    /// several a user owns, is currently connected and on which port).</summary>
     private void SetConnectionStatus(bool connected, string text)
     {
         _uiQueue.TryEnqueue(() =>
@@ -99,6 +102,7 @@ public sealed partial class RadioPage : Page
             ConnectionDot.Fill = connected ? ConnectedBrush : NotConnectedBrush;
             ConnectionStatusText.Text = text;
         });
+        AppShell.ActiveInstance?.SetConnectionStatus(connected, text);
     }
 
     private static string DescribeDevice(string deviceId, string port) =>
