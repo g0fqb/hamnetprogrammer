@@ -8,14 +8,18 @@ namespace HamNetProgrammer.Core.Online;
 public sealed record TalkGroupImportResult(string Network, int Added, int Updated, int Unchanged, IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// Imports talkgroup lists from public DMR network APIs into Contacts, tagged with which network
-/// they came from. Deliberately does NOT try to merge/dedupe the same DmrId across networks (e.g.
-/// Brandmeister's TG91 and TGIF's TG91 stay as two separate contacts) - talkgroup meaning genuinely
-/// varies by network, so silently treating them as the same contact would be a false equivalence.
-/// If importing would otherwise collide with an existing differently-tagged contact's exact name
-/// (Contacts has a UNIQUE(Name, CallType) constraint predating this feature, not touched here to
-/// avoid a table-rebuild migration on live user data), the new contact's name gets the network
-/// appended in parentheses to disambiguate rather than fail the import.
+/// Imports talkgroup lists from public DMR network APIs into Contacts, deduped strictly by DmrId -
+/// the radio's own TalkGroupList addresses a group call by number alone, with no concept of
+/// "network" anywhere in the format (confirmed: TalkGroupRecordCodec only encodes Name+DmrId), and
+/// which network a call actually reaches is entirely a function of the hotspot's own
+/// configuration, outside the codeplug. Treating "Brandmeister's TG91" and "FreeDMR's TG91" as
+/// different contacts would just waste a TalkGroupList slot on the radio for what is, at the
+/// protocol level, an identical group call target. Whichever import claims a DmrId first keeps it;
+/// a later import of the same number (from this or any other network, or a manually-created
+/// contact) leaves it untouched rather than creating a duplicate. Network is recorded purely as
+/// "where this contact's data came from" provenance, not a merge key - re-running the SAME
+/// network's import later can still refresh a name it previously set, but never overrides a number
+/// claimed by a different source.
 ///
 /// Three sources chosen for having a real, working, unauthenticated endpoint (confirmed directly,
 /// not assumed from documentation): Brandmeister's own public API needs no key despite some other
@@ -121,27 +125,31 @@ public static class TalkGroupNetworkImporter
         {
             long? existingId = null;
             string? existingName = null;
+            string? existingNetwork = null;
             using (var findCmd = db.CreateCommand())
             {
                 findCmd.Transaction = transaction;
-                findCmd.CommandText = "SELECT Id, Name FROM Contacts WHERE DmrId = $dmrId AND Network = $network AND CallType = 'Group';";
+                findCmd.CommandText = "SELECT Id, Name, Network FROM Contacts WHERE DmrId = $dmrId AND CallType = 'Group' LIMIT 1;";
                 findCmd.Parameters.AddWithValue("$dmrId", dmrId);
-                findCmd.Parameters.AddWithValue("$network", network);
                 using var reader = findCmd.ExecuteReader();
                 if (reader.Read())
                 {
                     existingId = reader.GetInt64(0);
                     existingName = reader.GetString(1);
+                    existingNetwork = reader.IsDBNull(2) ? null : reader.GetString(2);
                 }
             }
 
             if (existingId is { } id)
             {
-                if (existingName == name)
+                // A different source (another network, or a manually-created contact) already
+                // claimed this number - leave it alone rather than duplicate or override it.
+                if (existingNetwork != network || existingName == name)
                 {
                     unchanged++;
                     continue;
                 }
+                // Re-running THIS network's own import can still refresh a name it previously set.
                 using var updateCmd = db.CreateCommand();
                 updateCmd.Transaction = transaction;
                 updateCmd.CommandText = "UPDATE Contacts SET Name = $name WHERE Id = $id;";
@@ -152,15 +160,11 @@ public static class TalkGroupNetworkImporter
                 continue;
             }
 
-            // Disambiguate against Contacts.UNIQUE(Name, CallType) - not just across networks
-            // (the expected case), but also within the SAME network's own list, since a handful of
-            // real entries share an identical name under different DmrIds (confirmed against the
-            // real TGIF/FreeDMR/Brandmeister data, not a hypothetical). Network alone isn't always
-            // enough; falling back to including the DmrId (which IS guaranteed unique per network)
-            // always resolves it.
-            var insertName = NameExists(db, transaction, name) ? $"{name} ({network})" : name;
-            if (NameExists(db, transaction, insertName))
-                insertName = $"{name} ({network} TG{dmrId})";
+            // Disambiguate against Contacts.UNIQUE(Name, CallType) for the rarer case of two
+            // different DmrIds sharing an identical display name (confirmed against real data,
+            // not a hypothetical - e.g. TGIF has several distinct "SV2SNH" entries). Appending the
+            // DmrId is guaranteed unique here since we've just confirmed no row already has it.
+            var insertName = NameExists(db, transaction, name) ? $"{name} (TG{dmrId})" : name;
 
             using (var insertCmd = db.CreateCommand())
             {
