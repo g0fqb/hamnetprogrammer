@@ -7,12 +7,9 @@ public sealed record EncodedRegion(string Name, uint Address, byte[] Data);
 
 /// <summary>
 /// Builds the AT-D878UV memory write plan from the SQLite codeplug: Channels, Zones (+ names,
-/// used bitmap, default A/B channel), ScanLists (+ used bitmap), GroupLists, Contacts/TalkGroupList
-/// (+ used bitmap, control data), and RadioIds (+ used bitmap).
-///
-/// RoamingZones are not encoded yet - roaming is a separate structure not referenced by the
-/// channel record's core fields, so omitting it doesn't break anything already written; it's a
-/// deliberate, easy-to-extend gap rather than a correctness issue.
+/// used bitmap, default A/B channel), ScanLists (+ used bitmap), GroupLists, RoamingZones (+
+/// RoamingChannels, both used bitmaps), Contacts/TalkGroupList (+ used bitmap, control data), and
+/// RadioIds (+ used bitmap).
 ///
 /// Channel physical placement uses flat index = ChannelNumber - 1, preserving the user's existing
 /// numbering (including intentional zone-boundary gaps) rather than compacting it away.
@@ -34,6 +31,7 @@ public static class AnyToneD878CodeplugEncoder
         regions.AddRange(EncodeZones(db));
         regions.AddRange(EncodeScanLists(db));
         regions.AddRange(EncodeGroupLists(db, contactIndex));
+        regions.AddRange(EncodeRoaming(db));
         regions.AddRange(EncodeTalkGroups(db, contactIndex));
         regions.AddRange(EncodeRadioIds(db, radioIdIndex));
 
@@ -305,6 +303,112 @@ public static class AnyToneD878CodeplugEncoder
             yield return new EncodedRegion($"GroupList[{index + 1}]", address, data);
             index++;
         }
+    }
+
+    // RoamingChannels/RoamingChannelsUsed/RoamingZonesUsed/RoamingZones all live inside the SAME
+    // 256KB flash erase block (0x01040000-0x0107FFFF) - confirmed by inspecting the memory map:
+    // RoamingZones ends at 0x01045000, but the block runs to 0x0107FFFF, leaving ~237KB completely
+    // undocumented within it. This is exactly the ZoneAChannel/ZoneBChannel shared-block pattern
+    // that caused a real corruption incident (see ZoneChannelDefaultsBlockAddress's remarks) -
+    // writing any of these four regions standalone would erase the whole block and blank that
+    // undocumented tail. AnyToneD878CodeplugWriter handles this the same way: these four regions
+    // are emitted here at their real addresses (so names/addresses match the baseline dump for
+    // Restore), but the writer intercepts them, removes them from the direct-write list, and
+    // splices their bytes into a live read of the ENTIRE containing block before writing it back
+    // as one region - unlike the existing Zone A/B fix, which only covers documented sub-regions
+    // up to 0x1900 bytes and leaves its own block's tail as a smaller, still-open, deliberately
+    // separate risk (not repeated here now that the failure mode is fully understood).
+    public const uint RoamingBlockAddress = 0x01040000;
+    public const int RoamingBlockLength = 0x40000; // the FULL erase block, not just documented sections
+    public static readonly string[] RoamingBlockRegionNames = ["RoamingChannels", "RoamingChannelsUsed", "RoamingZonesUsed", "RoamingZones"];
+    public const int RoamingChannelsOffset = 0x0000;
+    public const int RoamingChannelsUsedOffset = 0x2000;
+    public const int RoamingZonesUsedOffset = 0x2080;
+    public const int RoamingZonesOffset = 0x3000;
+
+    private static IEnumerable<EncodedRegion> EncodeRoaming(SqliteConnection db)
+    {
+        var channelIndex = BuildRoamingChannelIndex(db);
+
+        var channelsBuffer = new byte[250 * 32];
+        var channelsUsedBuffer = new byte[32];
+
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT c.Id, c.Name, c.RxFrequencyHz, c.TxFrequencyHz, c.ColorCode, c.TimeSlot
+                FROM Channels c
+                WHERE c.Id IN (SELECT DISTINCT ChannelId FROM RoamingZoneChannels)
+                ORDER BY c.Id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var index = channelIndex[reader.GetInt64(0)];
+                var name = reader.GetString(1);
+                var rxHz = reader.GetInt64(2);
+                var txHz = reader.GetInt64(3);
+                var colorCode = reader.IsDBNull(4) ? (byte)1 : (byte)reader.GetInt32(4);
+                var slot = reader.IsDBNull(5) ? (byte)0 : (byte)(reader.GetInt32(5) == 2 ? 1 : 0);
+
+                RoamingChannelRecordCodec.Encode(new RoamingChannelRecord(rxHz, txHz, colorCode, slot, name))
+                    .CopyTo(channelsBuffer, index * 32);
+                SetBit(channelsUsedBuffer, index);
+            }
+        }
+
+        var zonesBuffer = new byte[64 * 128];
+        var zonesUsedBuffer = new byte[16];
+
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "SELECT Id, Name FROM RoamingZones ORDER BY Id;";
+            using var reader = cmd.ExecuteReader();
+            var zoneIndex = 0;
+            while (reader.Read())
+            {
+                if (zoneIndex >= 64) break; // hardware maximum
+
+                var roamingZoneId = reader.GetInt64(0);
+                var name = reader.GetString(1);
+
+                using var membersCmd = db.CreateCommand();
+                membersCmd.CommandText = """
+                    SELECT rzc.ChannelId
+                    FROM RoamingZoneChannels rzc
+                    WHERE rzc.RoamingZoneId = $id
+                    ORDER BY rzc.Position;
+                    """;
+                membersCmd.Parameters.AddWithValue("$id", roamingZoneId);
+                using var membersReader = membersCmd.ExecuteReader();
+                var members = new List<byte>();
+                while (membersReader.Read())
+                    members.Add(channelIndex[membersReader.GetInt64(0)]);
+
+                RoamingZoneRecordCodec.Encode(new RoamingZoneRecord(name, members)).CopyTo(zonesBuffer, zoneIndex * 128);
+                SetBit(zonesUsedBuffer, zoneIndex);
+                zoneIndex++;
+            }
+        }
+
+        yield return new EncodedRegion("RoamingChannels", 0x01040000, channelsBuffer);
+        yield return new EncodedRegion("RoamingChannelsUsed", 0x01042000, channelsUsedBuffer);
+        yield return new EncodedRegion("RoamingZonesUsed", 0x01042080, zonesUsedBuffer);
+        yield return new EncodedRegion("RoamingZones", 0x01043000, zonesBuffer);
+    }
+
+    // Distinct channels referenced by any roaming zone, in a stable order - must match
+    // EncodeRoaming's own indexing exactly, since roaming zone records reference this index.
+    private static Dictionary<long, byte> BuildRoamingChannelIndex(SqliteConnection db)
+    {
+        var map = new Dictionary<long, byte>();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT DISTINCT ChannelId FROM RoamingZoneChannels ORDER BY ChannelId;";
+        using var reader = cmd.ExecuteReader();
+        byte i = 0;
+        while (reader.Read())
+            map[reader.GetInt64(0)] = i++;
+        return map;
     }
 
     private static IEnumerable<EncodedRegion> EncodeTalkGroups(SqliteConnection db, Dictionary<long, uint> contactIndex)

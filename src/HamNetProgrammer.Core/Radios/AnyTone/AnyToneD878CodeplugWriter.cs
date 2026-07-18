@@ -24,6 +24,17 @@ public static class AnyToneD878CodeplugWriter
         if (allRegions.Any(r => r.Name == "Zones"))
             allRegions.Add(BuildZoneChannelDefaultsRegion(radio));
 
+        // RoamingChannels/RoamingChannelsUsed/RoamingZonesUsed/RoamingZones share a different
+        // 256KB erase block with a large undocumented tail - same failure mode as above, see
+        // AnyToneD878CodeplugEncoder.RoamingBlockAddress's remarks. Pull these four out of the
+        // direct-write list and splice them into a live read of the WHOLE containing block instead.
+        var roamingSubRegions = allRegions.Where(r => AnyToneD878CodeplugEncoder.RoamingBlockRegionNames.Contains(r.Name)).ToList();
+        if (roamingSubRegions.Count > 0)
+        {
+            allRegions.RemoveAll(r => roamingSubRegions.Contains(r));
+            allRegions.Add(BuildRoamingBlockRegion(radio, roamingSubRegions));
+        }
+
         var totalBytes = allRegions.Sum(r => (long)r.Data.Length);
         var writtenBytes = 0L;
 
@@ -58,5 +69,28 @@ public static class AnyToneD878CodeplugWriter
         Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneBChannelOffset, 512);
 
         return new EncodedRegion("ZoneChannelDefaults (read-modify-write)", address, buffer);
+    }
+
+    private static EncodedRegion BuildRoamingBlockRegion(AnyToneD878Transport radio, IReadOnlyList<EncodedRegion> subRegions)
+    {
+        var blockAddress = AnyToneD878CodeplugEncoder.RoamingBlockAddress;
+        var blockLength = AnyToneD878CodeplugEncoder.RoamingBlockLength;
+        var buffer = new byte[blockLength];
+
+        var offset = 0;
+        while (offset < blockLength)
+        {
+            var chunkLength = (byte)Math.Min(MaxReadChunkSize, blockLength - offset);
+            radio.ReadMemory(blockAddress + (uint)offset, chunkLength).CopyTo(buffer, offset);
+            offset += chunkLength;
+        }
+
+        foreach (var region in subRegions)
+        {
+            var relativeOffset = (int)(region.Address - blockAddress);
+            region.Data.CopyTo(buffer, relativeOffset);
+        }
+
+        return new EncodedRegion("RoamingBlock (read-modify-write)", blockAddress, buffer);
     }
 }
