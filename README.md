@@ -76,6 +76,10 @@ the commit history for the byte-level validation work this involved:
 Because of that, and in keeping with both projects' own terms, HamNetProgrammer is licensed under
 the GNU General Public License v3.0 (see [LICENSE](LICENSE)) - the source stays public.
 
+If you're extending support to another AnyTone model or just want the byte-level detail, see
+[docs/memory-map.md](docs/memory-map.md) - the region addresses, shared-erase-block hazards, and
+per-record layouts this project has confirmed so far.
+
 ## Build & run
 
 ```

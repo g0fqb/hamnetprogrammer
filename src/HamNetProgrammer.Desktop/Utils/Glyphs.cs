@@ -34,6 +34,7 @@ public static class Glyphs
     public static string IconRadioId => FromCodePoint(0xE8D4);
     public static string IconPeople => FromCodePoint(0xE716);
     public static string IconChannels => FromCodePoint(0xE71D);
+    public static string IconHealthCheck => FromCodePoint(0xE9D9);
 
     public static string Heart => FromCodePoint(0x2665);
     public static string Antenna => FromCodePoint(0x1F4E1);

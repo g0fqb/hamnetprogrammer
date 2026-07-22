@@ -54,10 +54,15 @@ public sealed class DumpReader
         return _data.AsSpan((int)offset + (int)slot * 64, 64);
     }
 
+    // Banked, matching AnyToneD878CodeplugEncoder.EncodeTalkGroups' ContactsPerBank=1000 exactly - see
+    // AnyToneD878MemoryMap's "TalkGroupList[{bank}]" remarks for why a flat offset used to be wrong
+    // past index 999.
     public ReadOnlySpan<byte> GetTalkGroupRecord(int index0Based)
     {
-        var (_, offset, _, _) = _regions["TalkGroupList"];
-        return _data.AsSpan((int)offset + index0Based * 100, 100);
+        var bank = index0Based / 1000;
+        var slot = index0Based % 1000;
+        var (_, offset, _, _) = _regions[$"TalkGroupList[{bank}]"];
+        return _data.AsSpan((int)offset + slot * 100, 100);
     }
 
     public ReadOnlySpan<byte> GetRadioIdRecord(int index0Based)
@@ -70,5 +75,25 @@ public sealed class DumpReader
     {
         var (_, offset, _, _) = _regions["Zones"];
         return _data.AsSpan((int)offset + index0Based * 512, 512);
+    }
+
+    /// <summary>Per-slot named region ("ScanList[N]", 1-based in the name) - already addressed
+    /// individually by AnyToneD878MemoryMap/AnyToneD878CodeplugEncoder, so this is just a thin
+    /// wrapper for symmetry with the other Get*Record accessors.</summary>
+    public ReadOnlySpan<byte> GetScanListRecord(int index0Based) => GetRegion($"ScanList[{index0Based + 1}]");
+
+    /// <summary>Per-slot named region ("GroupList[N]", 1-based in the name) - see GetScanListRecord's remarks.</summary>
+    public ReadOnlySpan<byte> GetGroupListRecord(int index0Based) => GetRegion($"GroupList[{index0Based + 1}]");
+
+    public ReadOnlySpan<byte> GetRoamingChannelRecord(int index0Based)
+    {
+        var (_, offset, _, _) = _regions["RoamingChannels"];
+        return _data.AsSpan((int)offset + index0Based * 32, 32);
+    }
+
+    public ReadOnlySpan<byte> GetRoamingZoneRecord(int index0Based)
+    {
+        var (_, offset, _, _) = _regions["RoamingZones"];
+        return _data.AsSpan((int)offset + index0Based * 128, 128);
     }
 }

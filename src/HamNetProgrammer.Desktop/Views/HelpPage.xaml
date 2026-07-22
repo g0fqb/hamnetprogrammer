@@ -168,6 +168,21 @@
                 </StackPanel>
             </Border>
 
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="License" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        HamNetProgrammer is free software, licensed under the GNU General Public
+                        License version 3. It comes with ABSOLUTELY NO WARRANTY; this is free
+                        software, and you are welcome to redistribute it under the terms of that
+                        license.
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        <Run Text="Source code, full license text, and everything covered in the Credits section above: " /><Hyperlink NavigateUri="https://github.com/g0fqb/hamnetprogrammer"><Run Text="github.com/g0fqb/hamnetprogrammer" /></Hyperlink>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
         </StackPanel>
     </ScrollViewer>
 </Page>

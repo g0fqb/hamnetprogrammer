@@ -94,8 +94,14 @@ public static class AnyToneD878MemoryMap
         regions.Add(new MemoryRegion("HotKeyBlock", 0x025c0000, 2864));
         regions.Add(new MemoryRegion("TalkGroupsControlData", 0x02600000, 10000 * 4));
         regions.Add(new MemoryRegion("TalkGroupListUsed", 0x02640000, 1264));
-        // Doc marks the per-entry size "100 bytes per dataset? TBC" - treated as approximate.
-        regions.Add(new MemoryRegion("TalkGroupList", 0x02680000, 10000 * 100));
+        // Banked, not one flat 1,000,000-byte array - matches AnyToneD878CodeplugEncoder.EncodeTalkGroups
+        // exactly (ContactsPerBank=1000, BetweenContactBanks=0x40000/256KB). A single flat region here
+        // used to only ever capture real data for the first ~1000 contacts (bank 0) before running into
+        // unrelated flash content, silently corrupting/misaligning any backup or decode of contact index
+        // >= 1000 - found 2026-07-22 while building the Read Codeplug importer. 10 banks covers the full
+        // 10,000-contact range TalkGroupsControlData/TalkGroupListUsed already assume.
+        for (var bank = 0; bank < 10; bank++)
+            regions.Add(new MemoryRegion($"TalkGroupList[{bank}]", 0x02680000u + (uint)bank * 0x40000u, 1000 * 100));
         regions.Add(new MemoryRegion("AnalogAddressBookIndexAndUsed", 0x02900000, 384));
         regions.Add(new MemoryRegion("AnalogAddressBook", 0x02940000, 3072));
         // 250 entries of 512 bytes, named per-slot (matching ScanList's naming) rather than as one

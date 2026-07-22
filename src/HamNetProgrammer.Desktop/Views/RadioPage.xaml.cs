@@ -113,6 +113,7 @@ public sealed partial class RadioPage : Page
             AutoDetectButton.IsEnabled = enabled;
             WriteCodeplugButton.IsEnabled = enabled && _connected;
             BackupButton.IsEnabled = enabled && _connected;
+            ReadCodeplugButton.IsEnabled = enabled && _connected;
             SyncReferenceDataButton.IsEnabled = enabled && _connected;
             ContributeSampleButton.IsEnabled = enabled && _connected;
             SendReportButton.IsEnabled = enabled && _lastDiagnosticsSession is not null;
@@ -1210,6 +1211,146 @@ public sealed partial class RadioPage : Page
         {
             SetComplete(false, result.Message);
         }
+    }
+
+    /// <summary>Reads the radio (same safe operation as Backup) then decodes that dump back into
+    /// the SQLite database via AnyToneD878CodeplugImporter - a good first action for a user who
+    /// already has a working radio and wants its configuration as a starting point instead of
+    /// building one from scratch. Gated on RadioRiskTier.Validated (hard block, not just a
+    /// disclaimer like Write's) - reads are safe on the radio regardless of model, but importing an
+    /// unverified model's mis-decoded bytes into the shared database fails invisibly rather than
+    /// loudly, unlike a bad write.</summary>
+    private async void OnReadCodeplugClicked(object sender, RoutedEventArgs e)
+    {
+        if (_operationInProgress) return;
+        if (SelectedPort is not { } port)
+        {
+            SetComplete(false, "Select a port first.");
+            return;
+        }
+
+        SetBusy(true, "Identifying radio...");
+        Log($"Opening {port} to identify the radio...");
+
+        string deviceId;
+        try
+        {
+            deviceId = await Task.Run(() =>
+            {
+                using var radio = new AnyToneD878Transport(port);
+                radio.Open();
+                try
+                {
+                    radio.StartProgrammingSession();
+                    var id = radio.ReadDeviceId();
+                    radio.EndProgrammingSession();
+                    return id;
+                }
+                finally
+                {
+                    radio.Close();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"Error identifying device: {ex.Message}");
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, $"Could not identify device: {ex.Message}");
+            SetBusy(false);
+            return;
+        }
+
+        var profile = RadioRiskCatalog.Lookup(deviceId);
+        SetConnectionStatus(true, DescribeDevice(deviceId, port));
+        SetBusy(false);
+        var settleTask = WatchRadioSettleAsync(port, "after being detected");
+
+        if (profile.Tier != RadioRiskTier.Validated)
+        {
+            Log($"Read Codeplug refused: {profile.ModelLabel} is {profile.Tier} risk, not hardware-verified.");
+            await settleTask;
+            SetComplete(false, $"{profile.ModelLabel} isn't a hardware-verified model for Read Codeplug - decoding it could silently import wrong data. Use \"Contribute a Memory Sample\" instead, which only reads and never decodes.");
+            return;
+        }
+
+        var confirm = new ContentDialog
+        {
+            Title = "Read Codeplug from Radio",
+            Content = "This reads the radio (safe, same as Backup), then updates this database: " +
+                      "new zones/channels/contacts/lists get added, and anything already here that " +
+                      "matches by name or channel number gets its details and membership refreshed " +
+                      "to match the radio. Nothing already in the database is deleted. Continue?",
+            PrimaryButtonText = "Read",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot,
+        };
+        await settleTask;
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+        {
+            Log("Read Codeplug cancelled.");
+            return;
+        }
+
+        SetBusy(true, "Reading radio memory...");
+        Log($"Opening {port} to read the radio...");
+
+        var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var safeDeviceId = string.Join("_", deviceId.Split(Path.GetInvalidFileNameChars()));
+        var sessionFolder = Path.Combine(AppPaths.DiagnosticsDirectory, $"{stamp}_read_{safeDeviceId}");
+        Directory.CreateDirectory(sessionFolder);
+        _lastDiagnosticsSession = sessionFolder;
+
+        var result = await Task.Run(() =>
+        {
+            try
+            {
+                var binPath = Path.Combine(sessionFolder, "read.bin");
+                var manifestPath = Path.Combine(sessionFolder, "read.manifest.csv");
+
+                using var radio = new AnyToneD878Transport(port);
+                radio.Open();
+                radio.StartProgrammingSession();
+                radio.ReadDeviceId();
+
+                var dumpResults = AnyToneD878MemoryDumper.Dump(radio, binPath, manifestPath, (region, index, total, bytesDone, totalBytes) =>
+                {
+                    SetProgress(bytesDone, totalBytes, $"Reading... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
+                    if (index % 40 == 0 || index == total) Log($"  [{index}/{total}] {region.Name}");
+                });
+                radio.EndProgrammingSession();
+
+                var failed = dumpResults.Count(r => !r.Succeeded);
+                Log($"Read complete: {dumpResults.Count} regions, {failed} failed.");
+
+                Log("Decoding and importing into the database...");
+                var dump = DumpReader.Load(binPath, manifestPath);
+                using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+                var importResult = AnyToneD878CodeplugImporter.Import(db, dump);
+
+                foreach (var category in importResult.Categories)
+                {
+                    Log($"  {category.Category}: {category.Matched} matched, {category.New} new, {category.Skipped} skipped.");
+                    foreach (var label in category.NewItemLabels)
+                        Log($"    + {label}");
+                }
+                foreach (var warning in importResult.Warnings)
+                    Log($"  Warning: {warning}");
+
+                return (Success: true, Message: $"Read complete - {importResult.Categories.Sum(c => c.New)} new, {importResult.Categories.Sum(c => c.Matched)} matched.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error: {ex.Message}");
+                return (Success: false, Message: ex.Message);
+            }
+        });
+
+        SetBusy(false);
+        SetComplete(result.Success, result.Message);
+        if (result.Success)
+            await WatchRadioSettleAsync(port, "after the read");
     }
 
     /// <summary>Writes the talkgroup list plus the bulk individual-callsign database (radioid.net,

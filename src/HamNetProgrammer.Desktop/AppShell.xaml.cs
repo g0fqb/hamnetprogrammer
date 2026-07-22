@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using HamNetProgrammer.Core.Online;
 using HamNetProgrammer.Desktop.Utils;
 using HamNetProgrammer.Desktop.Views;
 using Windows.System;
@@ -20,6 +21,8 @@ public class AppShell : Window
     private readonly Ellipse _connectionDot;
     private readonly TextBlock _connectionStatusText;
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _uiQueue;
+    private readonly InfoBar _updateBar;
+    private string? _updateDownloadUrl;
 
     /// <summary>The single running AppShell instance, so any page can reach the global connection
     /// indicator without a full navigation/DI service just for this. Set once in the constructor -
@@ -66,6 +69,7 @@ public class AppShell : Window
             CreateNavItem("Roaming", Glyphs.IconRoaming, "roaming"),
             CreateNavItem("Contacts", Glyphs.IconMail, "contacts"),
             CreateNavItem("Radio IDs", Glyphs.IconRadioId, "radioids"),
+            CreateNavItem("Health Check", Glyphs.IconHealthCheck, "healthcheck"),
             CreateNavItem("Lists", Glyphs.IconCheck, "lists"),
             CreateNavItem("Radio", Glyphs.IconRadio, "radio"),
             CreateNavItem("Settings", Glyphs.IconSettings, "settings"),
@@ -90,6 +94,26 @@ public class AppShell : Window
         topRightButtons.Children.Add(BuildFollowUsButton());
         topRightButtons.Children.Add(BuildDonateButton());
         contentWrapper.Children.Add(topRightButtons);
+
+        // Nag banner, not a forced update - the backend keeps its API backwards compatible across
+        // releases specifically so older clients keep working while people update at their own
+        // pace (same reasoning as PacketCluster's own AppShell, which this mirrors exactly).
+        var updateActionButton = new Button { Content = "Download" };
+        updateActionButton.Click += async (_, _) =>
+        {
+            if (!string.IsNullOrEmpty(_updateDownloadUrl))
+                await Launcher.LaunchUriAsync(new Uri(_updateDownloadUrl));
+        };
+        _updateBar = new InfoBar
+        {
+            Severity = InfoBarSeverity.Informational,
+            Title = "Update available",
+            IsOpen = false,
+            IsClosable = true,
+            ActionButton = updateActionButton,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        contentWrapper.Children.Add(_updateBar);
 
         _navView.Content = contentWrapper;
         _navView.ItemInvoked += OnNavItemInvoked;
@@ -144,6 +168,32 @@ public class AppShell : Window
         _rootGrid.Children.Add(statusBar);
 
         this.Content = _rootGrid;
+
+        _ = CheckForUpdateAsync();
+    }
+
+    // Unauthenticated, no radio/hardware involved - safe to call unconditionally at startup.
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            var info = await AppVersionCheck.GetLatestAsync();
+            if (info is null) return;
+
+            var current = typeof(AppShell).Assembly.GetName().Version;
+            if (current is null || !Version.TryParse(info.LatestVersion, out var latest)) return;
+            if (latest <= current) return;
+
+            _updateDownloadUrl = info.DownloadUrl;
+            _uiQueue.TryEnqueue(() =>
+            {
+                _updateBar.Message = string.IsNullOrEmpty(info.DownloadUrl)
+                    ? $"Version {info.LatestVersion} is available - see github.com/g0fqb/hamnetprogrammer for the download."
+                    : $"Version {info.LatestVersion} is available.";
+                _updateBar.IsOpen = true;
+            });
+        }
+        catch { }
     }
 
     public void SetConnectionStatus(bool connected, string text) => _uiQueue.TryEnqueue(() =>
@@ -250,6 +300,9 @@ public class AppShell : Window
                 break;
             case "radioids":
                 _contentFrame.Navigate(typeof(RadioIdsPage));
+                break;
+            case "healthcheck":
+                _contentFrame.Navigate(typeof(HealthCheckPage));
                 break;
             case "lists":
                 _contentFrame.Navigate(typeof(ListsPage));

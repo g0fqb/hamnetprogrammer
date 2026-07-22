@@ -1,6 +1,7 @@
 using System.IO.Ports;
 using System.Threading;
 using HamNetProgrammer.Core.Data;
+using HamNetProgrammer.Core.Diagnostics;
 using HamNetProgrammer.Core.Export;
 using HamNetProgrammer.Core.Import;
 using HamNetProgrammer.Core.Online;
@@ -39,6 +40,9 @@ if (args.Length > 0 && args[0].Equals("encode", StringComparison.OrdinalIgnoreCa
 if (args.Length > 0 && args[0].Equals("write-codeplug", StringComparison.OrdinalIgnoreCase))
     return RunWriteCodeplug(args.Skip(1).ToArray());
 
+if (args.Length > 0 && args[0].Equals("read-codeplug", StringComparison.OrdinalIgnoreCase))
+    return RunReadCodeplug(args.Skip(1).ToArray());
+
 if (args.Length > 0 && args[0].Equals("lookup-dmrid", StringComparison.OrdinalIgnoreCase))
     return await RunLookupDmrId(args.Skip(1).ToArray());
 
@@ -68,6 +72,9 @@ if (args.Length > 0 && args[0].Equals("write-wide-sweep", StringComparison.Ordin
 
 if (args.Length > 0 && args[0].Equals("merge-duplicate-talkgroups", StringComparison.OrdinalIgnoreCase))
     return RunMergeDuplicateTalkGroups(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("health-check", StringComparison.OrdinalIgnoreCase))
+    return RunHealthCheck(args.Skip(1).ToArray());
 
 if (args.Length > 0 && args[0].Equals("audit-talkgroups", StringComparison.OrdinalIgnoreCase))
     return await RunAuditTalkGroups(args.Skip(1).ToArray());
@@ -960,6 +967,32 @@ static int RunMergeDuplicateTalkGroups(string[] mergeArgs)
     return 0;
 }
 
+static int RunHealthCheck(string[] healthArgs)
+{
+    var dbPath = healthArgs.Length > 0
+        ? healthArgs[0]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var findings = CodeplugHealthCheck.Run(db);
+
+    if (findings.Count == 0)
+    {
+        Console.WriteLine("No issues found.");
+        return 0;
+    }
+
+    Console.WriteLine($"{findings.Count} category(ies) with findings:");
+    foreach (var finding in findings)
+    {
+        Console.WriteLine($"  {finding.Category}: {finding.Summary}");
+        foreach (var detail in finding.Details)
+            Console.WriteLine($"    - {detail}");
+    }
+
+    return 0;
+}
+
 static int RunWriteCodeplug(string[] writeArgs)
 {
     if (writeArgs.Length < 1)
@@ -1062,6 +1095,88 @@ static int RunWriteCodeplug(string[] writeArgs)
         var result = AnyToneD878CodeplugWriter.WriteAndVerifySharedBlock(portName, build, msg => Console.WriteLine($"  [{label}] {msg}"));
         if (!result.Verified)
             sharedBlockFailures.Add(result.Error ?? $"{label} failed to verify.");
+    }
+}
+
+// Decodes a full radio memory dump back into the SQLite database - the reverse of write-codeplug,
+// for a user who already has a working radio and wants its configuration as a starting point.
+// Gated on RadioRiskTier.Validated (D878UV only): reads are safe on the radio regardless of model,
+// but silently importing an unverified model's mis-decoded bytes into the shared database is not
+// the same kind of safe - a bad decode fails invisibly, unlike a bad write, which fails loudly.
+static int RunReadCodeplug(string[] readArgs)
+{
+    if (readArgs.Length < 1)
+    {
+        Console.WriteLine("Usage: HamNetProgrammer.Cli read-codeplug <port> [dbPath]");
+        return 1;
+    }
+
+    var portName = readArgs[0];
+    var dbPath = readArgs.Length > 1
+        ? readArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    try
+    {
+        string deviceId;
+        string binaryPath, manifestPath;
+        var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var dumpDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "dumps"));
+        Directory.CreateDirectory(dumpDir);
+        binaryPath = Path.Combine(dumpDir, $"read_{stamp}.bin");
+        manifestPath = Path.Combine(dumpDir, $"read_{stamp}.manifest.csv");
+
+        using (var radio = new AnyToneD878Transport(portName))
+        {
+            Console.WriteLine($"Opening {portName}...");
+            radio.Open();
+            radio.StartProgrammingSession();
+            deviceId = radio.ReadDeviceId();
+            Console.WriteLine($"Device identifier: {deviceId}");
+
+            var profile = RadioRiskCatalog.Lookup(deviceId);
+            if (profile.Tier != RadioRiskTier.Validated)
+            {
+                Console.WriteLine($"FAILED - {profile.ModelLabel} ({profile.Tier} risk) is not a hardware-verified model for Read Codeplug.");
+                Console.WriteLine("Decoding an unverified model's memory layout risks silently importing wrong data into the shared database.");
+                Console.WriteLine("Use the Desktop app's \"Contribute a Memory Sample\" instead - it only reads, never decodes/imports.");
+                radio.EndProgrammingSession();
+                return 1;
+            }
+
+            Console.WriteLine($"Dumping full memory to {binaryPath}...");
+            var results = AnyToneD878MemoryDumper.Dump(radio, binaryPath, manifestPath, (region, index, total, bytesDone, totalBytes) =>
+            {
+                if (index == 1 || index % 25 == 0 || index == total)
+                    Console.WriteLine($"  [{index}/{total}] {region.Name} - {bytesDone:N0}/{totalBytes:N0} bytes");
+            });
+            radio.EndProgrammingSession();
+
+            var failed = results.Count(r => !r.Succeeded);
+            Console.WriteLine($"Dump complete: {results.Count} regions, {failed} failed.");
+        }
+
+        Console.WriteLine("Decoding and importing into the database...");
+        var dump = DumpReader.Load(binaryPath, manifestPath);
+        using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+        var result = AnyToneD878CodeplugImporter.Import(db, dump);
+
+        foreach (var category in result.Categories)
+        {
+            Console.WriteLine($"  {category.Category}: {category.Matched} matched, {category.New} new, {category.Skipped} skipped.");
+            foreach (var label in category.NewItemLabels)
+                Console.WriteLine($"    + {label}");
+        }
+        foreach (var warning in result.Warnings)
+            Console.WriteLine($"  Warning: {warning}");
+
+        Console.WriteLine("Done.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error: {ex.Message}");
+        return 1;
     }
 }
 

@@ -68,6 +68,15 @@
                                 <Button x:Name="BackupButton" Content="Backup Radio Memory" Click="OnBackupClicked" />
                             </StackPanel>
                         </Border>
+
+                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Read codeplug from radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                           Text="Reads the radio (safe, same as Backup) and brings its zones/channels/contacts/lists into this database - a good first step if your radio is already set up. New items are added; items already here that match by name or channel number get their details and membership refreshed to match the radio. Nothing already in the database is deleted, so this is safe to run again later or from a second radio sharing the same codeplug. Only available for a hardware-verified radio model." />
+                                <Button x:Name="ReadCodeplugButton" Content="Read Codeplug from Radio" Click="OnReadCodeplugClicked" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Spacing="12">

@@ -133,13 +133,14 @@ public static class ChannelRecordCodec
         var colorCode = bytes[32];
         var timeSlot = (byte)((bytes[33] & 0b1) == 1 ? 2 : 1);
         var name = AsciiFieldCodec.Decode(bytes[35..51]);
+        var throughMode = (bytes[52] & 0b10) != 0;
 
         return new ChannelRecord(
             rxHz, txHz, is25kHz, power, isDigital, colorCode, timeSlot,
             contactIndex, radioIdIndex,
             scanListIndex == 0xFF ? null : scanListIndex,
             groupListIndex == 0xFF ? null : groupListIndex,
-            name, ctcssEncode, ctcssDecode);
+            name, ctcssEncode, ctcssDecode, throughMode);
     }
 
     private static void WriteUInt32LE(byte[] buffer, int offset, uint value)
