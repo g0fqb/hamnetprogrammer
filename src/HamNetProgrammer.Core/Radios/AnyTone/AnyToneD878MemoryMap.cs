@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace HamNetProgrammer.Core.Radios.AnyTone;
 
@@ -20,13 +22,18 @@ public static class AnyToneD878MemoryMap
     {
         var regions = new List<MemoryRegion>();
 
-        // Channels: 32 banks of 8192 bytes stepping by 0x40000, last bank only 2176 bytes.
-        // 4000 channels + 2 VFO channels, 64 bytes per channel.
+        // Channels: 32 banks stepping by 0x40000 (256KB), last bank only 2176 channel bytes.
+        // 4000 channels + 2 VFO channels, 64 bytes per channel. Each region also covers the TX
+        // Color Code table immediately after the channel table (same name/address/length as
+        // AnyToneD878CodeplugEncoder's ChannelBank[] write region, and MUST stay that way - see
+        // its remarks: channels and TX Color Code share one flash erase block and can only ever
+        // be safely read or written together, so a dump/restore that only captured the channel
+        // half would silently be unable to restore TX Color Code after a failed write).
         for (var i = 0; i < 32; i++)
         {
-            var address = 0x00800000u + (uint)(i * 0x40000);
-            var length = i == 31 ? 2176 : 8192;
-            regions.Add(new MemoryRegion($"Channels[{i}]", address, length));
+            var address = AnyToneD878CodeplugEncoder.ChannelBankBaseAddress + (uint)i * AnyToneD878CodeplugEncoder.ChannelBankStride;
+            var length = AnyToneD878CodeplugEncoder.TxColorCodeTableOffset + AnyToneD878CodeplugEncoder.ChannelBankChannelsLength(i);
+            regions.Add(new MemoryRegion($"ChannelBank[{i}]", address, length));
         }
 
         regions.Add(new MemoryRegion("Zones", 0x01000000, 250 * 512));
@@ -100,6 +107,33 @@ public static class AnyToneD878MemoryMap
         regions.Add(new MemoryRegion("LocalInformation", 0x02fa0000, 256));
         regions.Add(new MemoryRegion("StandbyBackgroundPicture1", 0x02b00000, 40960));
         regions.Add(new MemoryRegion("StandbyBackgroundPicture2", 0x02b80000, 40960));
+
+        // Read-only raw coverage of the "six-block supercluster" (0x02480000-0x025FFFFF) - the
+        // same six 256KB-aligned erase blocks both RT Systems and official AnyTone CPS write in
+        // full (confirmed via USB capture, 2026-07-19/2026-07-21 - see
+        // project_anytone_878_codeplug memory). The named regions above, added incrementally as
+        // this project reverse-engineered individual fields, cover under 10% of this range -
+        // everything else was never actually read by any backup/diagnostic dump, which made every
+        // past forensic diff (the exact technique that found the ContactIdTable and
+        // erase-block-disturb bugs) structurally blind to whatever lives in the gaps. This closes
+        // that gap for READS ONLY - no write path is affected - by filling every address span in
+        // this range not already covered by a named region above, so a future dump/diff has full
+        // visibility even into bytes this project doesn't understand yet.
+        const uint superclusterStart = 0x02480000u;
+        const uint superclusterEnd = 0x02600000u; // exclusive
+        var coveredInSupercluster = regions
+            .Where(r => r.Address >= superclusterStart && r.Address < superclusterEnd)
+            .OrderBy(r => r.Address)
+            .ToList();
+        var cursor = superclusterStart;
+        foreach (var covered in coveredInSupercluster)
+        {
+            if (covered.Address > cursor)
+                regions.Add(new MemoryRegion($"RawFill_0x{cursor:x8}", cursor, (int)(covered.Address - cursor)));
+            cursor = Math.Max(cursor, covered.Address + (uint)covered.Length);
+        }
+        if (cursor < superclusterEnd)
+            regions.Add(new MemoryRegion($"RawFill_0x{cursor:x8}", cursor, (int)(superclusterEnd - cursor)));
 
         return regions;
     }

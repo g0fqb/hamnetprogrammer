@@ -44,7 +44,7 @@ release - see [Roadmap](#roadmap).
 |---|---|
 | AnyTone AT-D878UV | Full read/write, hardware-verified. |
 | AnyTone AT-D868UV / AT-D578UV / AT-D890UV | Believed protocol-compatible (same vendor SDK family) but **not hardware-verified** - writes require typed confirmation of the risk. Read-only memory-map contribution is the safest way to help extend real support. |
-| TYT MD-380 / MD-390 / MD-UV380 / MD-UV390 / MD2017, Baofeng DM-1701 | DFU-mode transport layer proven against real MD-380 hardware (see `HamNetProgrammer.Cli`'s `tyt-identify`/`tyt-dump` commands) - **read-only, CLI-only, no codeplug decode/write yet.** This is a real reverse-engineered protocol (see qdmr's `tyt_codeplug.cc`), just not wired into the desktop app or GUI. |
+| TYT MD-380 / MD-390 / MD-UV380 / MD-UV390 / MD2017, Baofeng DM-1701 | DFU-mode transport layer proven against real MD-380 hardware (see `HamNetProgrammer.Cli`'s `tyt-identify`/`tyt-dump` commands) - **read-only, CLI-only, no codeplug decode/write yet.** The protocol itself is documented by qdmr (see its `tyt_codeplug.cc`), just not wired into the desktop app or GUI. |
 
 ## Architecture
 
@@ -62,8 +62,9 @@ release - see [Roadmap](#roadmap).
 ## Protocol & memory layout references
 
 The AT-D878UV's USB protocol and binary codeplug layout are not officially documented by AnyTone.
-This project relies on two independent reverse-engineering efforts (both GPL-licensed, referenced
-for understanding only):
+This project's understanding of them was built from two independently-documented open-source
+projects (both GPL-licensed) and confirmed directly against real hardware wherever possible - see
+the commit history for the byte-level validation work this involved:
 
 - [hmatuschek/qdmr](https://github.com/hmatuschek/qdmr) - full-featured C++ codeplug editor covering
   AnyTone, TYT/Retevis, Radioddity, and others (no Windows binary, Linux-only flatpak releases) -
@@ -71,6 +72,9 @@ for understanding only):
 - [reald/anytone-flash-tools](https://github.com/reald/anytone-flash-tools) - Wireshark-derived
   protocol (`at-d878uv_protocol.md`) and memory layout (`at-d878uv_memory.md`) notes, plus a Python
   radio emulator for safe testing over a virtual COM port pair (e.g. com0com on Windows).
+
+Because of that, and in keeping with both projects' own terms, HamNetProgrammer is licensed under
+the GNU General Public License v3.0 (see [LICENSE](LICENSE)) - the source stays public.
 
 ## Build & run
 

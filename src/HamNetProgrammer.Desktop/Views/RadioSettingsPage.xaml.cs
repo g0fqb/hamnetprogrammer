@@ -61,19 +61,19 @@ public sealed partial class RadioSettingsPage : Page
     private ComboBox? _gpsModeCombo;
     private ComboBox? _aprsReportTypeCombo;
     private TextBox? _callsignBox;
-    private TextBox? _callsignSsidBox;
+    private NumberBox? _callsignSsidBox;
     private TextBox? _destCallsignBox;
-    private TextBox? _destSsidBox;
+    private NumberBox? _destSsidBox;
     private TextBox? _signalPathBox;
-    private TextBox? _autoTxIntervalBox;
+    private NumberBox? _autoTxIntervalBox;
     private ComboBox? _callTypeCombo;
     private ComboBox? _slotCombo;
     private CheckBox? _fixedLocationBox;
-    private TextBox? _latDegreeBox;
-    private TextBox? _latMinuteBox;
+    private NumberBox? _latDegreeBox;
+    private NumberBox? _latMinuteBox;
     private ComboBox? _latSignCombo;
-    private TextBox? _lonDegreeBox;
-    private TextBox? _lonMinuteBox;
+    private NumberBox? _lonDegreeBox;
+    private NumberBox? _lonMinuteBox;
     private ComboBox? _lonSignCombo;
     private TextBox? _sendingTextBox;
     private TextBox? _gpsTemplateBox;
@@ -109,21 +109,21 @@ public sealed partial class RadioSettingsPage : Page
             var gpsMode = reader.IsDBNull(1) ? "Gps" : reader.GetString(1);
             var aprsReportType = reader.IsDBNull(2) ? "Off" : reader.GetString(2);
             var callsign = reader.IsDBNull(3) ? "" : reader.GetString(3);
-            var callsignSsid = reader.IsDBNull(4) ? "" : reader.GetInt64(4).ToString();
+            double? callsignSsid = reader.IsDBNull(4) ? null : reader.GetInt64(4);
             var destCallsign = reader.IsDBNull(5) ? "" : reader.GetString(5);
-            var destSsid = reader.IsDBNull(6) ? "" : reader.GetInt64(6).ToString();
+            double? destSsid = reader.IsDBNull(6) ? null : reader.GetInt64(6);
             var signalPath = reader.IsDBNull(7) ? "" : reader.GetString(7);
-            var autoTxInterval = reader.IsDBNull(8) ? "" : reader.GetInt64(8).ToString();
+            double? autoTxInterval = reader.IsDBNull(8) ? null : reader.GetInt64(8);
             long? reportChannelId = reader.IsDBNull(9) ? null : reader.GetInt64(9);
             long? talkGroupId = reader.IsDBNull(10) ? null : reader.GetInt64(10);
             var callType = reader.IsDBNull(11) ? "Group" : reader.GetString(11);
             int? slot = reader.IsDBNull(12) ? null : reader.GetInt32(12);
             bool? fixedLocation = reader.IsDBNull(13) ? null : reader.GetInt64(13) != 0;
-            var latDegree = reader.IsDBNull(14) ? "" : reader.GetInt64(14).ToString();
-            var latMinute = reader.IsDBNull(15) ? "" : reader.GetInt64(15).ToString();
+            double? latDegree = reader.IsDBNull(14) ? null : reader.GetInt64(14);
+            double? latMinute = reader.IsDBNull(15) ? null : reader.GetInt64(15);
             var latSign = reader.IsDBNull(16) ? "N" : reader.GetString(16);
-            var lonDegree = reader.IsDBNull(17) ? "" : reader.GetInt64(17).ToString();
-            var lonMinute = reader.IsDBNull(18) ? "" : reader.GetInt64(18).ToString();
+            double? lonDegree = reader.IsDBNull(17) ? null : reader.GetInt64(17);
+            double? lonMinute = reader.IsDBNull(18) ? null : reader.GetInt64(18);
             var lonSign = reader.IsDBNull(19) ? "E" : reader.GetString(19);
             var sendingText = reader.IsDBNull(20) ? "" : reader.GetString(20);
             var gpsTemplateText = reader.IsDBNull(21) ? "" : reader.GetString(21);
@@ -137,19 +137,19 @@ public sealed partial class RadioSettingsPage : Page
             _gpsModeCombo = new ComboBox { ItemsSource = GpsModeOptions, DisplayMemberPath = "Display", SelectedItem = GpsModeOptions.First(o => o.Value == gpsMode) };
             _aprsReportTypeCombo = new ComboBox { ItemsSource = AprsReportTypeOptions, DisplayMemberPath = "Display", SelectedItem = AprsReportTypeOptions.First(o => o.Value == aprsReportType) };
             _callsignBox = new TextBox { Text = callsign, PlaceholderText = "e.g. G0FQB" };
-            _callsignSsidBox = new TextBox { Text = callsignSsid, PlaceholderText = "0-15" };
+            _callsignSsidBox = RangeNumberBox(callsignSsid, 0, 15);
             _destCallsignBox = new TextBox { Text = destCallsign, PlaceholderText = "e.g. APAT81" };
-            _destSsidBox = new TextBox { Text = destSsid, PlaceholderText = "0-15" };
+            _destSsidBox = RangeNumberBox(destSsid, 0, 15);
             _signalPathBox = new TextBox { Text = signalPath, PlaceholderText = "e.g. WIDE1-1,WIDE2-1" };
-            _autoTxIntervalBox = new TextBox { Text = autoTxInterval, PlaceholderText = "seconds, 0 = off" };
+            _autoTxIntervalBox = RangeNumberBox(autoTxInterval, 0, 65535);
             _callTypeCombo = new ComboBox { ItemsSource = CallTypeOptions, DisplayMemberPath = "Display", SelectedItem = CallTypeOptions.First(o => o.Value == callType) };
             _slotCombo = new ComboBox { ItemsSource = SlotOptions, DisplayMemberPath = "Display", SelectedItem = SlotOptions.First(o => o.Value == slot) };
             _fixedLocationBox = new CheckBox { Content = "Send a fixed position instead of live GPS", IsChecked = fixedLocation ?? false };
-            _latDegreeBox = new TextBox { Text = latDegree, PlaceholderText = "deg" };
-            _latMinuteBox = new TextBox { Text = latMinute, PlaceholderText = "min" };
+            _latDegreeBox = RangeNumberBox(latDegree, 0, 90, 90);
+            _latMinuteBox = RangeNumberBox(latMinute, 0, 59, 90);
             _latSignCombo = new ComboBox { ItemsSource = new[] { "N", "S" }, SelectedItem = latSign };
-            _lonDegreeBox = new TextBox { Text = lonDegree, PlaceholderText = "deg" };
-            _lonMinuteBox = new TextBox { Text = lonMinute, PlaceholderText = "min" };
+            _lonDegreeBox = RangeNumberBox(lonDegree, 0, 180, 90);
+            _lonMinuteBox = RangeNumberBox(lonMinute, 0, 59, 90);
             _lonSignCombo = new ComboBox { ItemsSource = new[] { "E", "W" }, SelectedItem = lonSign };
             _sendingTextBox = new TextBox { Text = sendingText, PlaceholderText = "Free text appended to your APRS report", MaxLength = 60 };
             _gpsTemplateBox = new TextBox { Text = gpsTemplateText, PlaceholderText = "Template shown alongside GPS fixes", MaxLength = 32 };
@@ -230,21 +230,21 @@ public sealed partial class RadioSettingsPage : Page
             cmd.Parameters.Add(new SqliteParameter("$gpsMode", ((GpsModeOption)_gpsModeCombo!.SelectedItem).Value));
             cmd.Parameters.Add(new SqliteParameter("$aprsReportType", ((AprsReportTypeOption)_aprsReportTypeCombo!.SelectedItem).Value));
             cmd.Parameters.Add(new SqliteParameter("$callsign", (object?)NullIfEmpty(_callsignBox!.Text) ?? DBNull.Value));
-            cmd.Parameters.Add(new SqliteParameter("$callsignSsid", (object?)ParseIntOrNull(_callsignSsidBox!.Text) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$callsignSsid", (object?)NumberBoxValueOrNull(_callsignSsidBox!) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$destCallsign", (object?)NullIfEmpty(_destCallsignBox!.Text) ?? DBNull.Value));
-            cmd.Parameters.Add(new SqliteParameter("$destSsid", (object?)ParseIntOrNull(_destSsidBox!.Text) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$destSsid", (object?)NumberBoxValueOrNull(_destSsidBox!) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$signalPath", (object?)NullIfEmpty(_signalPathBox!.Text) ?? DBNull.Value));
-            cmd.Parameters.Add(new SqliteParameter("$autoTx", (object?)ParseIntOrNull(_autoTxIntervalBox!.Text) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$autoTx", (object?)NumberBoxValueOrNull(_autoTxIntervalBox!) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$reportChannelId", (object?)_reportChannelPicker!.GetSelectedId() ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$talkGroupId", (object?)_talkGroupPicker!.GetOrCreateId(db) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$callType", ((CallTypeOption)_callTypeCombo!.SelectedItem).Value));
             cmd.Parameters.Add(new SqliteParameter("$slot", (object?)((SlotOption)_slotCombo!.SelectedItem).Value ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$fixedLocation", _fixedLocationBox!.IsChecked == true ? 1 : 0));
-            cmd.Parameters.Add(new SqliteParameter("$latDeg", (object?)ParseIntOrNull(_latDegreeBox!.Text) ?? DBNull.Value));
-            cmd.Parameters.Add(new SqliteParameter("$latMin", (object?)ParseIntOrNull(_latMinuteBox!.Text) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$latDeg", (object?)NumberBoxValueOrNull(_latDegreeBox!) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$latMin", (object?)NumberBoxValueOrNull(_latMinuteBox!) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$latSign", (string)_latSignCombo!.SelectedItem));
-            cmd.Parameters.Add(new SqliteParameter("$lonDeg", (object?)ParseIntOrNull(_lonDegreeBox!.Text) ?? DBNull.Value));
-            cmd.Parameters.Add(new SqliteParameter("$lonMin", (object?)ParseIntOrNull(_lonMinuteBox!.Text) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$lonDeg", (object?)NumberBoxValueOrNull(_lonDegreeBox!) ?? DBNull.Value));
+            cmd.Parameters.Add(new SqliteParameter("$lonMin", (object?)NumberBoxValueOrNull(_lonMinuteBox!) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$lonSign", (string)_lonSignCombo!.SelectedItem));
             cmd.Parameters.Add(new SqliteParameter("$sendingText", (object?)NullIfEmpty(_sendingTextBox!.Text) ?? DBNull.Value));
             cmd.Parameters.Add(new SqliteParameter("$gpsTemplate", (object?)NullIfEmpty(_gpsTemplateBox!.Text) ?? DBNull.Value));
@@ -259,5 +259,21 @@ public sealed partial class RadioSettingsPage : Page
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static int? ParseIntOrNull(string value) => int.TryParse(value, out var v) ? v : null;
+
+    // NumberBox, not a free TextBox with a placeholder hint - these are all genuinely range-bound
+    // (an SSID is 0-15, a latitude minute is 0-59, etc.), and a placeholder-only hint like "0-15"
+    // was easy to ignore; NumberBox rejects non-numeric input directly and SpinButtons make the
+    // valid range visually obvious rather than something you find out by trial and error on write.
+    private static NumberBox RangeNumberBox(double? value, double min, double max, double width = 120) => new()
+    {
+        Value = value ?? double.NaN,
+        Minimum = min,
+        Maximum = max,
+        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+        SmallChange = 1,
+        PlaceholderText = "(none)",
+        Width = width,
+    };
+
+    private static int? NumberBoxValueOrNull(NumberBox box) => double.IsNaN(box.Value) ? null : (int)box.Value;
 }

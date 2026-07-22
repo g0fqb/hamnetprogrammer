@@ -60,10 +60,12 @@ public class AppShell : Window
         var menuItems = new List<NavigationViewItem>
         {
             CreateNavItem("Zones", Glyphs.IconZones, "zones"),
+            CreateNavItem("Channels", Glyphs.IconChannels, "channels"),
             CreateNavItem("Scan Lists", Glyphs.IconScanLists, "scanlists"),
             CreateNavItem("Group Lists", Glyphs.IconGroupLists, "grouplists"),
             CreateNavItem("Roaming", Glyphs.IconRoaming, "roaming"),
             CreateNavItem("Contacts", Glyphs.IconMail, "contacts"),
+            CreateNavItem("Radio IDs", Glyphs.IconRadioId, "radioids"),
             CreateNavItem("Lists", Glyphs.IconCheck, "lists"),
             CreateNavItem("Radio", Glyphs.IconRadio, "radio"),
             CreateNavItem("Settings", Glyphs.IconSettings, "settings"),
@@ -76,7 +78,18 @@ public class AppShell : Window
 
         var contentWrapper = new Grid();
         contentWrapper.Children.Add(_contentFrame);
-        contentWrapper.Children.Add(BuildDonateButton());
+
+        var topRightButtons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 6, 10, 0),
+        };
+        topRightButtons.Children.Add(BuildFollowUsButton());
+        topRightButtons.Children.Add(BuildDonateButton());
+        contentWrapper.Children.Add(topRightButtons);
 
         _navView.Content = contentWrapper;
         _navView.ItemInvoked += OnNavItemInvoked;
@@ -152,9 +165,6 @@ public class AppShell : Window
         var btn = new Button
         {
             Content = Glyphs.Heart + " Support",
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 6, 10, 0),
             Padding = new Thickness(10, 4, 10, 4),
             FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
@@ -168,6 +178,31 @@ public class AppShell : Window
         {
             await Launcher.LaunchUriAsync(
                 new Uri("https://www.paypal.com/donate?business=g0fqb1%40gmail.com&currency_code=GBP&item_name=HamNetProgrammer"));
+        };
+        return btn;
+    }
+
+    // Cross-promotes the other tools in the "Ham Net" stable (PacketCluster/Ham Net Global,
+    // SOARC Globe, etc.) via a shared Facebook group where the user posts updates on each -
+    // deliberately just a link/icon, not full marketing copy, since this is a low-key "by the
+    // way" next to Support, not the app's main pitch.
+    private static UIElement BuildFollowUsButton()
+    {
+        var btn = new Button
+        {
+            Content = Glyphs.IconPeople + " Follow us on Facebook",
+            Padding = new Thickness(10, 4, 10, 4),
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x6b, 0xb0, 0xb8)),
+            Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(40, 0x6b, 0xb0, 0xb8)),
+            BorderBrush = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(100, 0x6b, 0xb0, 0xb8)),
+            CornerRadius = new CornerRadius(14),
+            IsHitTestVisible = true,
+        };
+        btn.Click += async (_, _) =>
+        {
+            await Launcher.LaunchUriAsync(new Uri("https://www.facebook.com/groups/1835944906597806"));
         };
         return btn;
     }
@@ -198,6 +233,9 @@ public class AppShell : Window
             case "zones":
                 _contentFrame.Navigate(typeof(ZonesPage));
                 break;
+            case "channels":
+                _contentFrame.Navigate(typeof(ChannelsPage));
+                break;
             case "scanlists":
                 _contentFrame.Navigate(typeof(ScanListsPage));
                 break;
@@ -209,6 +247,9 @@ public class AppShell : Window
                 break;
             case "contacts":
                 _contentFrame.Navigate(typeof(ContactsPage));
+                break;
+            case "radioids":
+                _contentFrame.Navigate(typeof(RadioIdsPage));
                 break;
             case "lists":
                 _contentFrame.Navigate(typeof(ListsPage));

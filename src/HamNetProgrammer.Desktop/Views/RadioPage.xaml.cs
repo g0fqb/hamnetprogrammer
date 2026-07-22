@@ -7,8 +7,10 @@ using Microsoft.UI.Xaml.Media;
 using HamNetProgrammer.Desktop;
 using HamNetProgrammer.Core.Data;
 using HamNetProgrammer.Core.Diagnostics;
+using HamNetProgrammer.Core.Online;
 using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
+using HamNetProgrammer.Core.Radios.AnyTone.CallsignDb;
 using HamNetProgrammer.Desktop.Utils;
 
 namespace HamNetProgrammer.Desktop.Views;
@@ -36,8 +38,6 @@ public sealed partial class RadioPage : Page
     // text once a radio reappears after resetting, without every caller having to pass it in.
     private string? _lastConnectedLabel;
     private string? _lastDiagnosticsSession;
-    private string? _lastWriteSessionFolder;
-    private string? _lastWritePort;
 
     public RadioPage()
     {
@@ -62,7 +62,13 @@ public sealed partial class RadioPage : Page
         // Belt-and-braces alongside NavigationCacheMode above: even an explicit manual refresh
         // shouldn't discard a still-valid port selection.
         var previouslySelected = PortComboBox.SelectedItem as string;
-        var ports = SerialPort.GetPortNames();
+        // SerialPort.GetPortNames() returns registry enumeration order, not numeric order (e.g.
+        // COM1, COM2, COM13, COM14, ..., COM7, COM19, COM12) - genuinely confusing on a machine
+        // with many ports, and the one wanted can end up scrolled off-screen. Sort by the numeric
+        // suffix instead of the raw string (which would put COM13 before COM2).
+        var ports = SerialPort.GetPortNames()
+            .OrderBy(p => int.TryParse(p.AsSpan(3), out var n) ? n : int.MaxValue)
+            .ToArray();
         PortComboBox.ItemsSource = ports;
         if (previouslySelected is not null && ports.Contains(previouslySelected))
             PortComboBox.SelectedItem = previouslySelected;
@@ -107,9 +113,13 @@ public sealed partial class RadioPage : Page
             AutoDetectButton.IsEnabled = enabled;
             WriteCodeplugButton.IsEnabled = enabled && _connected;
             BackupButton.IsEnabled = enabled && _connected;
+            SyncReferenceDataButton.IsEnabled = enabled && _connected;
             ContributeSampleButton.IsEnabled = enabled && _connected;
             SendReportButton.IsEnabled = enabled && _lastDiagnosticsSession is not null;
-            RestoreButton.IsEnabled = enabled && _lastWriteSessionFolder is not null;
+            // Not gated on _lastWriteSessionFolder (this app session's own last write) - Restore
+            // now offers every past write's backup via RestorePointPicker, so it should be
+            // available whenever a radio is connected, same as Write/Backup/Sync.
+            RestoreButton.IsEnabled = enabled && _connected;
             RefreshButton.IsEnabled = !_operationInProgress;
         });
     }
@@ -182,6 +192,14 @@ public sealed partial class RadioPage : Page
         });
     }
 
+    /// <summary>Shows/hides the "radio will restart several times, this is expected" banner -
+    /// only used around Write Codeplug, the one operation that legitimately drops the radio off
+    /// USB and re-enumerates it repeatedly (once per isolated channel-bank/shared-block session).
+    /// Without this, someone unfamiliar with the tool watching the radio reboot itself 8+ times in
+    /// a row could easily read that as something going wrong.</summary>
+    private void SetRebootNoticeVisible(bool visible) =>
+        _uiQueue.TryEnqueue(() => RebootNoticeBanner.Visibility = visible ? Visibility.Visible : Visibility.Collapsed);
+
     /// <summary>Reports a finished operation's outcome persistently (fills the progress bar,
     /// colors the status text) so a fast operation doesn't complete without any visible trace.</summary>
     private void SetComplete(bool success, string message)
@@ -202,11 +220,16 @@ public sealed partial class RadioPage : Page
     /// every radio-opening button until the port is confirmed to have come back, running in the
     /// background rather than blocking the click that triggered it - it's a background settle
     /// watch, not an in-line wait.</summary>
-    private async Task WatchRadioSettleAsync(string port)
+    /// <param name="reason">Fills the blank in "Radio is resetting {reason} - waiting for it to
+    /// come back..." - callers should describe what just happened (e.g. "after being detected",
+    /// "after the write") so this doesn't read as a stale/generic "after that session" regardless
+    /// of context, which was confusing right after something as simple as Auto-Detect or Test
+    /// Connection.</param>
+    private async Task WatchRadioSettleAsync(string port, string reason = "after that check")
     {
         _radioSettling = true;
         UpdateButtonStates();
-        SetProgress(0, 1, "Radio is resetting after that session - waiting for it to come back...");
+        SetProgress(0, 1, $"Radio is resetting {reason} - waiting for it to come back...");
         Log($"Watching {port} for the radio to finish resetting before allowing another session...");
         // The radio just confirmed itself moments ago, but that session ending means it's
         // currently mid drop-off/re-enumerate at the USB level - showing green "Connected" through
@@ -222,7 +245,7 @@ public sealed partial class RadioPage : Page
         if (backAgain)
         {
             Log("Radio is back and ready for another session.");
-            SetComplete(true, "Radio ready.");
+            SetComplete(true, "Radio successfully detected and ready.");
             SetConnectionStatus(true, _lastConnectedLabel ?? DescribeDevice("unknown", port));
         }
         else
@@ -292,7 +315,7 @@ public sealed partial class RadioPage : Page
             SetConnectionStatus(true, DescribeDevice(result.DeviceId, result.Port));
             Log($"Radio found on {result.Port}.");
             SetBusy(false);
-            await WatchRadioSettleAsync(result.Port);
+            await WatchRadioSettleAsync(result.Port, "after being detected");
         }
         else
         {
@@ -342,7 +365,7 @@ public sealed partial class RadioPage : Page
             Log("Connection OK.");
             SetConnectionStatus(true, DescribeDevice(result.Message, port));
             SetBusy(false);
-            await WatchRadioSettleAsync(port);
+            await WatchRadioSettleAsync(port, "after being detected");
         }
         else
         {
@@ -365,27 +388,33 @@ public sealed partial class RadioPage : Page
             return;
         }
 
+        if (!await ConfirmContactsFreshEnoughAsync())
+        {
+            Log("Write cancelled - contacts not synced.");
+            return;
+        }
+
         SetBusy(true, "Identifying radio...");
         Log($"Opening {port} to identify the radio...");
 
-        string deviceId;
+        // One continuous session now covers identify through the final commit, instead of three
+        // separate sessions (identify, baseline backup, write) each ending and restarting. Ending
+        // ANY session costs a real reboot/re-enumerate (~10-25s) - confirmed directly on real
+        // hardware that the old three-session shape cost four full reboots for one Write Codeplug
+        // run (three unnecessary, plus the one actually unavoidable for the commit itself). The
+        // radio just idles on its "PC Write" screen while this session is held open across the
+        // disclaimer dialog wait below - nothing in either reference source, or this project's own
+        // hardware testing, suggests an open-but-idle session times out or causes harm.
+        (AnyToneD878Transport Radio, string DeviceId) identified;
         try
         {
-            deviceId = await Task.Run(() =>
+            identified = await Task.Run(() =>
             {
-                using var radio = new AnyToneD878Transport(port);
-                radio.Open();
-                try
-                {
-                    radio.StartProgrammingSession();
-                    var id = radio.ReadDeviceId();
-                    radio.EndProgrammingSession();
-                    return id;
-                }
-                finally
-                {
-                    radio.Close();
-                }
+                var r = new AnyToneD878Transport(port);
+                r.Open();
+                r.StartProgrammingSession();
+                var id = r.ReadDeviceId();
+                return (r, id);
             });
         }
         catch (Exception ex)
@@ -397,6 +426,8 @@ public sealed partial class RadioPage : Page
             return;
         }
 
+        var radio = identified.Radio;
+        var deviceId = identified.DeviceId;
         var profile = RadioRiskCatalog.Lookup(deviceId);
         Log($"Device identifier: {deviceId} ({profile.ModelLabel}, {profile.Tier} risk).");
         SetConnectionStatus(true, DescribeDevice(deviceId, port));
@@ -404,9 +435,23 @@ public sealed partial class RadioPage : Page
 
         if (!await RiskDisclaimerDialog.ShowAsync(this.XamlRoot, profile))
         {
-            Log("Write cancelled.");
+            Log("Write cancelled - releasing the radio from programming mode...");
+            try
+            {
+                await Task.Run(() =>
+                {
+                    radio.EndProgrammingSession();
+                    radio.Close();
+                });
+            }
+            catch (Exception ex)
+            {
+                Log($"Error releasing radio (it may still show 'PC Write' until power-cycled): {ex.Message}");
+            }
             return;
         }
+
+        SetRebootNoticeVisible(true);
 
         var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var safeDeviceId = string.Join("_", deviceId.Split(Path.GetInvalidFileNameChars()));
@@ -415,8 +460,8 @@ public sealed partial class RadioPage : Page
         _lastDiagnosticsSession = sessionFolder;
         var toolVersion = typeof(RadioPage).Assembly.GetName().Version?.ToString() ?? "dev";
 
-        SetBusy(true, "Encoding codeplug...");
-        Log("Encoding codeplug from database...");
+        SetBusy(true, "Taking pre-write baseline backup...");
+        Log("Taking pre-write baseline backup (for diagnostics if anything goes wrong)...");
 
         var result = await Task.Run(() =>
         {
@@ -426,26 +471,18 @@ public sealed partial class RadioPage : Page
 
             try
             {
-                Log("Taking pre-write baseline backup (for diagnostics if anything goes wrong)...");
                 auditLog.LogNote("Starting pre-write baseline backup.");
-                using (var radio = new AnyToneD878Transport(port))
-                {
-                    radio.Open();
-                    radio.StartProgrammingSession();
-                    radio.ReadDeviceId();
-                    var baselineResults = AnyToneD878MemoryDumper.Dump(radio,
-                        Path.Combine(sessionFolder, "baseline_before.bin"),
-                        Path.Combine(sessionFolder, "baseline_before.manifest.csv"),
-                        (region, index, total) =>
-                        {
-                            SetProgress(index, total, $"Pre-write backup... [{index}/{total}] {region.Name}");
-                            if (index % 40 == 0 || index == total) Log($"  baseline [{index}/{total}] {region.Name}");
-                        });
-                    radio.EndProgrammingSession();
-                    var failed = baselineResults.Count(r => !r.Succeeded);
-                    auditLog.LogNote($"Baseline backup: {baselineResults.Count} regions, {failed} failed.");
-                    Log($"Baseline backup complete ({baselineResults.Count} regions, {failed} failed).");
-                }
+                var baselineResults = AnyToneD878MemoryDumper.Dump(radio,
+                    Path.Combine(sessionFolder, "baseline_before.bin"),
+                    Path.Combine(sessionFolder, "baseline_before.manifest.csv"),
+                    (region, index, total, bytesDone, totalBytes) =>
+                    {
+                        SetProgress(bytesDone, totalBytes, $"Pre-write backup... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
+                        if (index % 40 == 0 || index == total) Log($"  baseline [{index}/{total}] {region.Name}");
+                    });
+                var baselineFailed = baselineResults.Count(r => !r.Succeeded);
+                auditLog.LogNote($"Baseline backup: {baselineResults.Count} regions, {baselineFailed} failed.");
+                Log($"Baseline backup complete ({baselineResults.Count} regions, {baselineFailed} failed). Same session, no reboot needed here.");
 
                 using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
 
@@ -494,30 +531,118 @@ public sealed partial class RadioPage : Page
                     auditLog.LogNote($"Warning: {warning}");
                 }
 
-                using var writeRadio = new AnyToneD878Transport(port);
-                Log($"Opening {port}...");
-                writeRadio.Open();
+                // ChannelBank[N] regions (channel table + TX Color Code table combined, see
+                // AnyToneD878CodeplugEncoder.EncodeChannels' remarks) each get their own committed,
+                // read-back-verified session - kept OUT of the bundled write below both because
+                // including them was found to overflow that session's reliability threshold
+                // (2026-07-21) and because splitting a bank's two halves across separate sessions
+                // would risk a same-erase-block disturb between them (see the encoder's remarks).
+                var channelBankRegions = regions.Where(r => r.Name.StartsWith("ChannelBank[")).OrderBy(r => r.Name).ToList();
+                var bundledRegions = regions.Where(r => !r.Name.StartsWith("ChannelBank[")).ToList();
+                var sharedBlockFailures = new List<string>();
 
-                Log("Starting programming session (radio should show 'PC Mode')...");
-                writeRadio.StartProgrammingSession();
-                writeRadio.ReadDeviceId();
+                // Every session end is a real radio restart (see RebootNoticeBanner) - counting
+                // them up front and threading "restart N of totalSessions" through each SetBusy
+                // call turns "why does this keep rebooting" into visible, expected progress instead
+                // of several unexplained resets in a row.
+                var totalSessions = 1 + channelBankRegions.Count +
+                    (AnyToneD878CodeplugWriter.HasRoamingBlock(regions) ? 1 : 0) +
+                    (AnyToneD878CodeplugWriter.HasGeneralUsedBitmapsBlock(regions) ? 1 : 0) +
+                    (AnyToneD878CodeplugWriter.HasZoneChannelDefaults(regions) ? 1 : 0);
+                var sessionStep = 0;
 
-                var started = DateTime.Now;
-                AnyToneD878CodeplugWriter.Write(writeRadio, regions, (region, index, total, written, totalW) =>
+                // Reuses the SAME connection identify/baseline-backup already opened above -
+                // matching this method's own documented intent ("one continuous session now covers
+                // identify through the final commit"). Opening a SECOND AnyToneD878Transport on the
+                // same port here, without ever closing the first, was a real bug: Windows denies
+                // the second Open() with "Access to the path 'COMn' is denied" since the original
+                // `radio` handle is still live (found on real hardware 2026-07-22) - and even if it
+                // hadn't been, closing and reopening here would cost an entirely unnecessary extra
+                // reboot on top of the ones this write already needs.
                 {
-                    var elapsed = DateTime.Now - started;
-                    Log($"  [{index}/{total}] {region.Name} done - {written:N0}/{totalW:N0} bytes, {elapsed.TotalSeconds:F0}s elapsed");
-                    auditLog.LogRegion(region.Name, region.Address, region.Data.Length, "written");
-                    SetProgress(written, totalW, $"Writing... [{index}/{total}] {region.Name} ({written:N0}/{totalW:N0} bytes)");
-                });
+                    sessionStep++;
+                    var started = DateTime.Now;
+                    AnyToneD878CodeplugWriter.WriteSafeRegions(radio, bundledRegions, (region, index, total, written, totalW) =>
+                    {
+                        var elapsed = DateTime.Now - started;
+                        Log($"  [{index}/{total}] {region.Name} done - {written:N0}/{totalW:N0} bytes, {elapsed.TotalSeconds:F0}s elapsed");
+                        auditLog.LogRegion(region.Name, region.Address, region.Data.Length, "written");
+                        SetProgress(written, totalW, $"Restart {sessionStep}/{totalSessions} - writing {region.Name} ({written:N0}/{totalW:N0} bytes)");
+                    });
 
-                Log("Ending programming session (this commits the write - device will drop off USB and re-enumerate)...");
-                writeRadio.EndProgrammingSession();
-                writeRadio.Close();
+                    Log("Ending programming session (this commits the write - device will drop off USB and re-enumerate)...");
+                    radio.EndProgrammingSession();
+                    radio.Close();
+                    committed = true;
+                    auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
+                }
+
+                foreach (var bankRegion in channelBankRegions)
+                {
+                    sessionStep++;
+                    SetBusy(true, $"Restart {sessionStep}/{totalSessions} - writing and verifying {bankRegion.Name}...");
+                    const int maxBytesPerSession = 20_000; // each bank is at most ~16,384 bytes - one chunk per bank
+                    var verified = AnyToneD878CodeplugWriter.WriteRegionChunkedAndVerify(port, bankRegion, maxBytesPerSession, msg =>
+                    {
+                        Log($"  {msg}");
+                        auditLog.LogNote(msg);
+                    });
+                    if (verified)
+                        auditLog.LogRegion(bankRegion.Name, bankRegion.Address, bankRegion.Data.Length, "written and verified");
+                    else
+                        sharedBlockFailures.Add($"{bankRegion.Name} did not verify correctly.");
+                }
+
+                // The three shared-erase-block regions below each get their OWN isolated session
+                // (own Start, own End, own re-enumerate wait), built/written/verified/retried end to
+                // end by WriteAndVerifySharedBlock. ZoneChannelDefaults MUST be written LAST - proven
+                // on real hardware (2026-07-19) that GeneralUsedBitmapsBlock's address
+                // (0x024C0000) + its length lands at EXACTLY ZoneChannelDefaultsBlockAddress
+                // (0x02500000): they're physically contiguous erase blocks on the same flash die, and
+                // writing GeneralUsedBitmapsBlock corrupts an already-good, untouched
+                // ZoneChannelDefaults as a program/erase-disturb side effect - session isolation and
+                // write-verify-retry on ZoneChannelDefaults itself can't help if something else writes
+                // its neighbor afterward. RoamingBlock is at a different address entirely and was
+                // confirmed NOT to cause this (5 isolated write cycles, no disturb), so its position
+                // relative to the other two doesn't matter.
+                WriteSharedBlockAndCheck("RoamingBlock", AnyToneD878CodeplugWriter.HasRoamingBlock(regions), r =>
+                    AnyToneD878CodeplugWriter.BuildRoamingBlockRegion(r, regions));
+                WriteSharedBlockAndCheck("GeneralUsedBitmapsBlock", AnyToneD878CodeplugWriter.HasGeneralUsedBitmapsBlock(regions), r =>
+                    AnyToneD878CodeplugWriter.BuildGeneralUsedBitmapsBlockRegion(r, regions));
+                WriteSharedBlockAndCheck("ZoneChannelDefaults", AnyToneD878CodeplugWriter.HasZoneChannelDefaults(regions), r =>
+                    AnyToneD878CodeplugWriter.BuildZoneChannelDefaultsRegion(r, regions));
+
+                void WriteSharedBlockAndCheck(string label, bool needed, Func<AnyToneD878Transport, EncodedRegion> build)
+                {
+                    if (!needed) return;
+
+                    sessionStep++;
+                    SetBusy(true, $"Restart {sessionStep}/{totalSessions} - writing and verifying {label}...");
+                    var writeResult = AnyToneD878CodeplugWriter.WriteAndVerifySharedBlock(port, build, msg =>
+                    {
+                        Log($"  [{label}] {msg}");
+                        auditLog.LogNote($"{label}: {msg}");
+                    });
+
+                    if (writeResult.Verified)
+                    {
+                        auditLog.LogRegion(label, writeResult.Address, writeResult.Length, $"written and verified (attempt {writeResult.Attempts})");
+                    }
+                    else
+                    {
+                        sharedBlockFailures.Add(writeResult.Error ?? $"{label} failed to verify.");
+                        auditLog.LogNote($"FAILED: {writeResult.Error}");
+                    }
+                }
+
+                if (sharedBlockFailures.Count > 0)
+                {
+                    Log("WARNING: one or more shared blocks did not verify correctly even after automatic retries:");
+                    foreach (var f in sharedBlockFailures) Log($"  {f}");
+                    Log("Do not assume the radio is in a good state - check it before further writes.");
+                }
+
                 Log("Write complete.");
-                committed = true;
-                auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
-
                 Log("Waiting for the radio to re-enumerate for a post-write verification backup...");
                 SetBusy(true, "Waiting for radio to re-enumerate...");
                 if (WaitForPortToReturn(port, TimeSpan.FromSeconds(45)))
@@ -530,9 +655,9 @@ public sealed partial class RadioPage : Page
                     var afterResults = AnyToneD878MemoryDumper.Dump(afterRadio,
                         Path.Combine(sessionFolder, "baseline_after.bin"),
                         Path.Combine(sessionFolder, "baseline_after.manifest.csv"),
-                        (region, index, total) =>
+                        (region, index, total, bytesDone, totalBytes) =>
                         {
-                            SetProgress(index, total, $"Post-write backup... [{index}/{total}] {region.Name}");
+                            SetProgress(bytesDone, totalBytes, $"Post-write backup... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
                             if (index % 40 == 0 || index == total) Log($"  post-write [{index}/{total}] {region.Name}");
                         });
                     afterRadio.EndProgrammingSession();
@@ -548,6 +673,14 @@ public sealed partial class RadioPage : Page
                     SetConnectionStatus(false, "Not connected - radio did not re-enumerate.");
                 }
 
+                if (sharedBlockFailures.Count > 0)
+                {
+                    auditLog.End("failed", string.Join(" | ", sharedBlockFailures));
+                    return (Success: false,
+                        Message: $"Write mostly completed ({regions.Count} regions, {totalBytes:N0} bytes) but {sharedBlockFailures.Count} shared block(s) failed to verify even after retries - check the radio before writing again. Use Send Diagnostic Report to have this investigated.",
+                        Committed: committed);
+                }
+
                 auditLog.End("success");
                 return (Success: true, Message: $"Write complete - {regions.Count} regions, {totalBytes:N0} bytes.", Committed: committed);
             }
@@ -561,14 +694,52 @@ public sealed partial class RadioPage : Page
             }
         });
 
-        if (result.Committed)
-        {
-            _lastWriteSessionFolder = sessionFolder;
-            _lastWritePort = port;
-        }
-
+        SetRebootNoticeVisible(false);
         SetComplete(result.Success, result.Message);
         SetBusy(false);
+    }
+
+    /// <summary>Routine writes stopped including the talkgroup list (it's large, changes rarely -
+    /// see AnyToneD878CodeplugEncoder's remarks on Build's includeTalkGroups parameter), so a
+    /// channel referencing a contact added/removed/reordered since the last "Sync Reference Data"
+    /// run may point at something the radio's copy of the list doesn't actually have at that
+    /// position - the exact shape of the old TG1-fallback bug, just from a different cause. This
+    /// checks a cheap fingerprint before writing and asks rather than writing something wrong
+    /// silently.</summary>
+    private async Task<bool> ConfirmContactsFreshEnoughAsync()
+    {
+        (long Count, long MaxId) current, lastSynced;
+        try
+        {
+            using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+            current = AnyToneD878CodeplugEncoder.GetContactIndexFingerprint(db);
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "SELECT LastSyncedContactCount, LastSyncedMaxContactId FROM RadioSettings WHERE Id = 1;";
+            using var reader = cmd.ExecuteReader();
+            reader.Read();
+            lastSynced = (reader.GetInt64(0), reader.GetInt64(1));
+        }
+        catch (Exception ex)
+        {
+            Log($"Could not check contact sync status (continuing anyway): {ex.Message}");
+            return true;
+        }
+
+        if (current == lastSynced) return true;
+
+        var dialog = new ContentDialog
+        {
+            Title = $"{Glyphs.IconAlert}  Contacts Not Synced",
+            Content = "Your talkgroups/contacts have changed since the last time you ran " +
+                      "\"Sync Reference Data\" (Radio page). This write won't touch the radio's " +
+                      "talkgroup list, so any channel using a contact added or removed since then " +
+                      "may show the wrong (or no) name until you sync. Write anyway, or sync first?",
+            PrimaryButtonText = "Write Anyway",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
     /// <summary>Polls for the port to disappear (the USB drop after EndProgrammingSession) and
@@ -632,9 +803,9 @@ public sealed partial class RadioPage : Page
                     SetConnectionStatus(true, DescribeDevice(deviceId, port));
                     var results = AnyToneD878MemoryDumper.Dump(radio,
                         Path.Combine(folder, "backup.bin"), Path.Combine(folder, "backup.manifest.csv"),
-                        (region, index, total) =>
+                        (region, index, total, bytesDone, totalBytes) =>
                         {
-                            SetProgress(index, total, $"Backing up... [{index}/{total}] {region.Name}");
+                            SetProgress(bytesDone, totalBytes, $"Backing up... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
                             if (index % 40 == 0 || index == total) Log($"  [{index}/{total}] {region.Name}");
                         });
                     radio.EndProgrammingSession();
@@ -660,7 +831,7 @@ public sealed partial class RadioPage : Page
             // Fire-and-forget: nothing else in this flow needs the radio again (the rest is
             // packaging/upload), so there's no reason to make sending the report wait on it -
             // it just needs to disable the radio buttons in the background until settled.
-            _ = WatchRadioSettleAsync(port);
+            _ = WatchRadioSettleAsync(port, "after the backup");
             sessionFolder = folder;
             _lastDiagnosticsSession = folder;
         }
@@ -707,18 +878,34 @@ public sealed partial class RadioPage : Page
     private async void OnRestoreClicked(object sender, RoutedEventArgs e)
     {
         if (_operationInProgress) return;
-        if (_lastWriteSessionFolder is not { } sessionFolder || _lastWritePort is not { } port)
+        if (SelectedPort is not { } port)
         {
-            SetComplete(false, "No committed write this session to restore.");
+            SetComplete(false, "Select a port first.");
             return;
         }
 
+        // Every past Write Codeplug run left its own pre-write baseline on disk (see
+        // RestorePointPicker's remarks) - not just the most recent one from this app session, so
+        // this can go back further than "undo my last action" (e.g. a week, if that backup is
+        // still on disk). Restores to whichever port is selected NOW, which may not be the same
+        // port name the original write used.
+        var candidates = RestorePointPicker.Scan(AppPaths.DiagnosticsDirectory);
+        if (candidates.Count == 0)
+        {
+            SetComplete(false, "No Write Codeplug run has been backed up yet - Backup Radio Memory alone doesn't create a restore point (it doesn't write anything, so there's nothing to undo). Run Write Codeplug at least once first.");
+            return;
+        }
+
+        var picked = await RestorePointPicker.ShowAsync(this.XamlRoot, candidates);
+        if (picked is null) return;
+        var sessionFolder = picked.FolderPath;
+
         var confirm = new ContentDialog
         {
-            Title = "Restore Previous Codeplug",
-            Content = "This writes back exactly what the last Write Codeplug run overwrote, using the " +
-                      "automatic backup taken just before it - undoing that write. It does not touch " +
-                      "anything that write didn't touch. Continue?",
+            Title = "Restore Codeplug",
+            Content = $"This writes back exactly what the {picked.Timestamp.ToLocalTime():yyyy-MM-dd HH:mm} " +
+                      "Write Codeplug run overwrote, using the automatic backup taken just before it - " +
+                      "undoing that write. It does not touch anything that write didn't touch. Continue?",
             PrimaryButtonText = "Restore",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
@@ -727,7 +914,7 @@ public sealed partial class RadioPage : Page
         if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
 
         SetBusy(true, "Restoring previous codeplug...");
-        Log("Restoring from the pre-write baseline backup...");
+        Log($"Restoring from the pre-write baseline backup in {sessionFolder}...");
 
         var result = await Task.Run(() =>
         {
@@ -739,44 +926,149 @@ public sealed partial class RadioPage : Page
                 var writtenRegions = WriteSessionAuditLog.ReadWrittenRegions(Path.Combine(sessionFolder, "audit.jsonl"));
                 if (writtenRegions.Count == 0)
                 {
-                    Log("Nothing was recorded as written in that session - nothing to restore.");
-                    auditLog.End("skipped", "No written regions recorded.");
-                    return (Success: true, Message: "Nothing to restore.");
+                    // "Nothing recorded as written" is an inference the radio is still fine, not
+                    // proof - found the hard way (2026-07-22) when a write failed before any
+                    // WriteMemory call: the honest thing to do is actually check, the same way that
+                    // failure's radio state was verified (a fresh dump, byte-diffed against the
+                    // pre-write baseline), rather than just reporting silence.
+                    Log("Nothing was recorded as written in that session - taking a fresh dump to verify the radio still matches its pre-write baseline...");
+                    auditLog.LogNote("Nothing recorded as written - verifying against baseline instead of restoring.");
+
+                    var baselineForVerify = DumpReader.Load(
+                        Path.Combine(sessionFolder, "baseline_before.bin"),
+                        Path.Combine(sessionFolder, "baseline_before.manifest.csv"));
+
+                    using (var verifyRadio = new AnyToneD878Transport(port))
+                    {
+                        Log($"Opening {port}...");
+                        verifyRadio.Open();
+                        verifyRadio.StartProgrammingSession();
+                        var verifyDeviceId = verifyRadio.ReadDeviceId();
+                        SetConnectionStatus(true, DescribeDevice(verifyDeviceId, port));
+
+                        var verifyResults = AnyToneD878MemoryDumper.Dump(verifyRadio,
+                            Path.Combine(sessionFolder, "verify_now.bin"),
+                            Path.Combine(sessionFolder, "verify_now.manifest.csv"),
+                            (region, index, total, bytesDone, totalBytes) =>
+                            {
+                                SetProgress(bytesDone, totalBytes, $"Verifying... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
+                                if (index % 40 == 0 || index == total) Log($"  verify [{index}/{total}] {region.Name}");
+                            });
+                        verifyRadio.EndProgrammingSession();
+
+                        var verifyFailed = verifyResults.Count(r => !r.Succeeded);
+                        auditLog.LogNote($"Verification dump: {verifyResults.Count} regions, {verifyFailed} failed.");
+                    }
+
+                    var freshDump = DumpReader.Load(
+                        Path.Combine(sessionFolder, "verify_now.bin"),
+                        Path.Combine(sessionFolder, "verify_now.manifest.csv"));
+                    var comparison = DumpComparer.Compare(baselineForVerify, freshDump);
+
+                    if (comparison.AllMatch)
+                    {
+                        Log($"Verified: {comparison.RegionsCompared} region(s) match the pre-write baseline exactly. The radio is unchanged.");
+                        auditLog.End("success", $"Verified match: {comparison.RegionsCompared} regions, 0 mismatches.");
+                        return (Success: true, Message: $"Verified - radio matches its pre-write baseline exactly ({comparison.RegionsCompared} regions compared).");
+                    }
+
+                    Log($"WARNING: {comparison.MismatchedRegionNames.Count} region(s) DIFFER from the pre-write baseline despite nothing being recorded as written:");
+                    foreach (var name in comparison.MismatchedRegionNames) Log($"  MISMATCH: {name}");
+                    auditLog.End("failed", $"{comparison.MismatchedRegionNames.Count} region(s) differ from baseline.");
+                    return (Success: false,
+                        Message: $"WARNING - {comparison.MismatchedRegionNames.Count} region(s) differ from the pre-write baseline even though nothing was recorded as written. Do not assume the radio is in a good state.");
                 }
 
                 var baseline = DumpReader.Load(
                     Path.Combine(sessionFolder, "baseline_before.bin"),
                     Path.Combine(sessionFolder, "baseline_before.manifest.csv"));
 
-                using var radio = new AnyToneD878Transport(port);
-                Log($"Opening {port}...");
-                radio.Open();
-                radio.StartProgrammingSession();
-                var restoreDeviceId = radio.ReadDeviceId();
-                SetConnectionStatus(true, DescribeDevice(restoreDeviceId, port));
-
-                var restored = AnyToneD878CodeplugRestorer.Restore(radio, baseline, writtenRegions, (region, index, total) =>
+                List<RestoredRegion> restored;
+                using (var radio = new AnyToneD878Transport(port))
                 {
-                    if (region.Skipped)
+                    Log($"Opening {port}...");
+                    radio.Open();
+                    radio.StartProgrammingSession();
+                    var restoreDeviceId = radio.ReadDeviceId();
+                    SetConnectionStatus(true, DescribeDevice(restoreDeviceId, port));
+
+                    restored = AnyToneD878CodeplugRestorer.RestorePlainRegions(radio, baseline, writtenRegions, (region, index, total) =>
                     {
-                        Log($"  [{index}/{total}] {region.Name}: skipped - {region.SkipReason}");
-                        auditLog.LogRegion(region.Name, region.Address, region.Length, "skipped", region.SkipReason);
+                        if (region.Skipped)
+                        {
+                            Log($"  [{index}/{total}] {region.Name}: skipped - {region.SkipReason}");
+                            auditLog.LogRegion(region.Name, region.Address, region.Length, "skipped", region.SkipReason);
+                        }
+                        else
+                        {
+                            Log($"  [{index}/{total}] {region.Name}: restored");
+                            auditLog.LogRegion(region.Name, region.Address, region.Length, "restored");
+                        }
+                        SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
+                    });
+
+                    Log("Ending programming session (this commits the restore)...");
+                    radio.EndProgrammingSession();
+                    radio.Close();
+                }
+
+                // Same isolated-session-plus-verify treatment as a fresh write. ZoneChannelDefaults
+                // MUST be restored LAST - proven on real hardware (2026-07-19) that
+                // GeneralUsedBitmapsBlock is physically contiguous with ZoneChannelDefaults on the
+                // same flash die (0x024C0000 + its length == 0x02500000 exactly) and writing it
+                // disturbs/corrupts an already-good, untouched ZoneChannelDefaults - session
+                // isolation and verify-retry on ZoneChannelDefaults itself can't help if something
+                // else writes its neighbor afterward. RoamingBlock is at a different address and
+                // confirmed NOT to cause this.
+                var sharedBlockFailures = new List<string>();
+                RestoreSharedBlockAndCheck("RoamingBlock", AnyToneD878CodeplugRestorer.HasRoamingBlock(writtenRegions),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredRoamingBlock(r, baseline));
+                RestoreSharedBlockAndCheck("GeneralUsedBitmapsBlock", AnyToneD878CodeplugRestorer.HasGeneralUsedBitmapsBlock(writtenRegions),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredGeneralUsedBitmapsBlock(r, baseline));
+                RestoreSharedBlockAndCheck("ZoneChannelDefaults", AnyToneD878CodeplugRestorer.HasZoneChannelDefaults(writtenRegions),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredZoneChannelDefaults(r, baseline));
+
+                void RestoreSharedBlockAndCheck(string label, bool needed, Func<AnyToneD878Transport, EncodedRegion> build)
+                {
+                    if (!needed) return;
+
+                    SetBusy(true, $"Restoring and verifying {label}...");
+                    var writeResult = AnyToneD878CodeplugWriter.WriteAndVerifySharedBlock(port, build, msg =>
+                    {
+                        Log($"  [{label}] {msg}");
+                        auditLog.LogNote($"{label}: {msg}");
+                    });
+
+                    if (writeResult.Verified)
+                    {
+                        auditLog.LogRegion(label, writeResult.Address, writeResult.Length, $"restored and verified (attempt {writeResult.Attempts})");
+                        restored.Add(new RestoredRegion(label, writeResult.Address, writeResult.Length, false, null));
                     }
                     else
                     {
-                        Log($"  [{index}/{total}] {region.Name}: restored");
-                        auditLog.LogRegion(region.Name, region.Address, region.Length, "restored");
+                        sharedBlockFailures.Add(writeResult.Error ?? $"{label} failed to verify.");
+                        auditLog.LogNote($"FAILED: {writeResult.Error}");
                     }
-                    SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
-                });
+                }
 
-                Log("Ending programming session (this commits the restore)...");
-                radio.EndProgrammingSession();
-                radio.Close();
+                if (sharedBlockFailures.Count > 0)
+                {
+                    Log("WARNING: one or more shared blocks did not restore correctly even after automatic retries:");
+                    foreach (var f in sharedBlockFailures) Log($"  {f}");
+                    Log("Do not assume the radio is in a good state - check it before further writes.");
+                }
+
                 var skipped = restored.Count(r => r.Skipped);
                 Log($"Restore complete: {restored.Count - skipped} region(s) restored, {skipped} skipped.");
                 auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
 
+                // Restore's whole point is to bring the radio back to exactly the pre-write
+                // baseline - so that baseline is also the correctness check: comparing the fresh
+                // post-restore dump against it proves the restore actually worked, rather than
+                // just reporting that the write-back commands completed without error (which the
+                // 2026-07-19/20/21 erase-block-disturb incidents proved is not the same thing).
+                var restoreVerified = false;
+                DumpComparisonResult? restoreComparison = null;
                 if (WaitForPortToReturn(port, TimeSpan.FromSeconds(45)))
                 {
                     Log("Radio is back - taking post-restore verification backup...");
@@ -787,14 +1079,34 @@ public sealed partial class RadioPage : Page
                     var afterResults = AnyToneD878MemoryDumper.Dump(afterRadio,
                         Path.Combine(sessionFolder, "baseline_after_restore.bin"),
                         Path.Combine(sessionFolder, "baseline_after_restore.manifest.csv"),
-                        (region, index, total) =>
+                        (region, index, total, bytesDone, totalBytes) =>
                         {
-                            SetProgress(index, total, $"Post-restore backup... [{index}/{total}] {region.Name}");
+                            SetProgress(bytesDone, totalBytes, $"Post-restore backup... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
                             if (index % 40 == 0 || index == total) Log($"  post-restore [{index}/{total}] {region.Name}");
                         });
                     afterRadio.EndProgrammingSession();
                     var failed = afterResults.Count(r => !r.Succeeded);
                     auditLog.LogNote($"Post-restore backup: {afterResults.Count} regions, {failed} failed.");
+
+                    var beforeBaseline = DumpReader.Load(
+                        Path.Combine(sessionFolder, "baseline_before.bin"),
+                        Path.Combine(sessionFolder, "baseline_before.manifest.csv"));
+                    var afterRestoreDump = DumpReader.Load(
+                        Path.Combine(sessionFolder, "baseline_after_restore.bin"),
+                        Path.Combine(sessionFolder, "baseline_after_restore.manifest.csv"));
+                    restoreComparison = DumpComparer.Compare(beforeBaseline, afterRestoreDump);
+                    restoreVerified = restoreComparison.AllMatch;
+
+                    if (restoreVerified)
+                    {
+                        Log($"Verified: all {restoreComparison.RegionsCompared} compared region(s) now match the pre-write baseline exactly.");
+                    }
+                    else
+                    {
+                        Log($"WARNING: {restoreComparison.MismatchedRegionNames.Count} region(s) still differ from the pre-write baseline after restore:");
+                        foreach (var name in restoreComparison.MismatchedRegionNames) Log($"  MISMATCH: {name}");
+                    }
+                    auditLog.LogNote($"Post-restore verification: {restoreComparison.RegionsCompared} compared, {restoreComparison.MismatchedRegionNames.Count} mismatch(es).");
                 }
                 else
                 {
@@ -802,8 +1114,25 @@ public sealed partial class RadioPage : Page
                     auditLog.LogNote("WARNING: radio did not re-enumerate within 45s after restore.");
                 }
 
+                if (sharedBlockFailures.Count > 0)
+                {
+                    auditLog.End("failed", string.Join(" | ", sharedBlockFailures));
+                    return (Success: false,
+                        Message: $"Restore mostly completed ({restored.Count - skipped} region(s)) but {sharedBlockFailures.Count} shared block(s) failed to verify even after retries - check the radio before writing again. Use Send Diagnostic Report to have this investigated.");
+                }
+
+                if (!restoreVerified)
+                {
+                    var mismatchCount = restoreComparison?.MismatchedRegionNames.Count ?? 0;
+                    auditLog.End("failed", $"{mismatchCount} region(s) still differ from baseline after restore.");
+                    return (Success: false,
+                        Message: mismatchCount > 0
+                            ? $"Restore completed but {mismatchCount} region(s) still differ from the pre-write baseline - do not assume the radio matches. Use Send Diagnostic Report to have this investigated."
+                            : "Restore completed but could not be verified (radio didn't re-enumerate in time) - check it before assuming it matches the pre-write baseline.");
+                }
+
                 auditLog.End("success");
-                return (Success: true, Message: $"Restore complete: {restored.Count - skipped} region(s) restored.");
+                return (Success: true, Message: $"Restore complete and verified: {restored.Count - skipped} region(s) restored, radio now matches its pre-write baseline.");
             }
             catch (Exception ex)
             {
@@ -813,6 +1142,12 @@ public sealed partial class RadioPage : Page
             }
         });
 
+        // Was never set anywhere in this method - Send Diagnostic Report stayed disabled after
+        // every restore, success or failure, so a failed restore's "see the log for details" had
+        // no way to actually get that log to anyone without the user manually copying text out of
+        // a panel most people don't know is there. Set unconditionally (not just on failure) so
+        // it's available either way, matching what Write Codeplug already does.
+        _lastDiagnosticsSession = sessionFolder;
         SetComplete(result.Success, result.Message);
         SetBusy(false);
     }
@@ -845,9 +1180,9 @@ public sealed partial class RadioPage : Page
                 Log($"Device identifier: {deviceId}");
                 SetConnectionStatus(true, DescribeDevice(deviceId, port));
 
-                var results = AnyToneD878MemoryDumper.Dump(radio, binPath, manifestPath, (region, index, total) =>
+                var results = AnyToneD878MemoryDumper.Dump(radio, binPath, manifestPath, (region, index, total, bytesDone, totalBytes) =>
                 {
-                    SetProgress(index, total, $"Backing up... [{index}/{total}] {region.Name}");
+                    SetProgress(bytesDone, totalBytes, $"Backing up... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
                     if (index % 20 == 0 || index == total)
                         Log($"  [{index}/{total}] {region.Name}");
                 });
@@ -869,12 +1204,244 @@ public sealed partial class RadioPage : Page
         if (result.Success)
         {
             SetComplete(true, result.Message);
-            await WatchRadioSettleAsync(port);
+            await WatchRadioSettleAsync(port, "after the backup");
         }
         else
         {
             SetComplete(false, result.Message);
         }
+    }
+
+    /// <summary>Writes the talkgroup list plus the bulk individual-callsign database (radioid.net,
+    /// ~309k rows) - deliberately separate from Write Codeplug (see AnyToneD878CodeplugEncoder's
+    /// remarks on includeTalkGroups): both change rarely and take real time/bytes to upload, so
+    /// bundling them into every small channel edit was the actual problem being solved here. The
+    /// callsign database region was read-verified empty on real hardware before this was built -
+    /// nothing pre-existing is at risk, but it's genuinely new/untested territory for this project,
+    /// hence the explicit confirmation and no automatic pre-write backup (the region is ~800MB of
+    /// reserved address space in total; a full baseline dump of it was never feasible - same
+    /// pre-existing gap the talkgroup list write has always had).</summary>
+    private async void OnSyncReferenceDataClicked(object sender, RoutedEventArgs e)
+    {
+        if (_operationInProgress) return;
+        if (SelectedPort is not { } port)
+        {
+            SetComplete(false, "Select a port first.");
+            return;
+        }
+
+        SetBusy(true, "Identifying radio...");
+        Log($"Opening {port} to identify the radio...");
+
+        string deviceId;
+        try
+        {
+            deviceId = await Task.Run(() =>
+            {
+                using var radio = new AnyToneD878Transport(port);
+                radio.Open();
+                try
+                {
+                    radio.StartProgrammingSession();
+                    var id = radio.ReadDeviceId();
+                    radio.EndProgrammingSession();
+                    return id;
+                }
+                finally
+                {
+                    radio.Close();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"Error identifying device: {ex.Message}");
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, $"Could not identify device: {ex.Message}");
+            SetBusy(false);
+            return;
+        }
+
+        var profile = RadioRiskCatalog.Lookup(deviceId);
+        SetConnectionStatus(true, DescribeDevice(deviceId, port));
+        SetBusy(false);
+
+        var settleTask = WatchRadioSettleAsync(port, "after being detected");
+
+        var confirm = new ContentDialog
+        {
+            Title = $"{Glyphs.IconAlert}  Sync Reference Data",
+            Content = "This writes your talkgroup list and the full radioid.net individual-" +
+                      "callsign database to the radio - likely tens of megabytes and several " +
+                      "minutes, far more than a normal Write Codeplug. There's no automatic " +
+                      "backup for the callsign database region beforehand, the way there is for " +
+                      "a codeplug write. Only run this with the radio staying connected and " +
+                      "powered for the whole duration.",
+            PrimaryButtonText = "Sync",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot,
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+        {
+            Log("Sync cancelled.");
+            return;
+        }
+
+        await settleTask;
+        SetRebootNoticeVisible(true);
+
+        var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var safeDeviceId = string.Join("_", deviceId.Split(Path.GetInvalidFileNameChars()));
+        var sessionFolder = Path.Combine(AppPaths.DiagnosticsDirectory, $"{stamp}_sync_{safeDeviceId}");
+        Directory.CreateDirectory(sessionFolder);
+        _lastDiagnosticsSession = sessionFolder;
+        var toolVersion = typeof(RadioPage).Assembly.GetName().Version?.ToString() ?? "dev";
+
+        SetBusy(true, "Preparing reference data...");
+        Log("Encoding talkgroup list...");
+
+        List<EncodedRegion> regions;
+        (long Count, long MaxId) fingerprint;
+        try
+        {
+            regions = await Task.Run(async () =>
+            {
+                var warnings = new List<string>();
+                using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+                var talkGroupRegions = AnyToneD878CodeplugEncoder.BuildTalkGroupsOnly(db, warnings);
+                Log($"  {talkGroupRegions.Count} talkgroup region(s) encoded.");
+
+                if (!File.Exists(AppPaths.RadioIdCachePath) ||
+                    (DateTime.UtcNow - File.GetLastWriteTimeUtc(AppPaths.RadioIdCachePath)).TotalDays > 7)
+                {
+                    Log("Downloading radioid.net user database (~17MB, cached for 7 days)...");
+                    SetBusy(true, "Downloading radioid.net database...");
+                    await RadioIdLookup.DownloadToCacheAsync(AppPaths.RadioIdCachePath);
+                }
+
+                Log("Reading and encoding the callsign database (this can take a moment)...");
+                SetBusy(true, "Encoding callsign database...");
+                var users = RadioIdLookup.ReadAll(AppPaths.RadioIdCachePath);
+                var callsignDbUsers = users
+                    .Select(u => new CallsignDbUser(u.DmrId, u.Callsign, u.Name, u.City, u.State, u.Country))
+                    .ToList();
+                var callsignDbRegions = CallsignDbEncoder.Build(callsignDbUsers, warnings);
+                Log($"  {callsignDbUsers.Count:N0} individuals, {callsignDbRegions.Count} region(s) encoded.");
+
+                foreach (var warning in warnings) Log($"  Warning: {warning}");
+
+                var allRegions = talkGroupRegions.Concat(callsignDbRegions).ToList();
+                return allRegions;
+            });
+            using var fingerprintDb = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+            fingerprint = AnyToneD878CodeplugEncoder.GetContactIndexFingerprint(fingerprintDb);
+        }
+        catch (Exception ex)
+        {
+            Log($"Error preparing reference data: {ex.Message}");
+            SetRebootNoticeVisible(false);
+            SetComplete(false, $"Could not prepare reference data: {ex.Message}");
+            SetBusy(false);
+            return;
+        }
+
+        var totalBytes = regions.Sum(r => (long)r.Data.Length);
+        Log($"Writing {regions.Count} regions, {totalBytes:N0} bytes to {port}...");
+        SetBusy(true, "Writing reference data...");
+
+        // TalkGroupList[N] bank regions (see AnyToneD878CodeplugEncoder's remarks on bank-based
+        // addressing - real hardware corruption 2026-07-19 traced to treating this list as one
+        // flat array) each get their own committed session and read-back verification, rather than
+        // being bundled with everything else. The other talkgroup regions (small, a few tens of KB)
+        // and the Callsign Database regions (already real-hardware-validated as one bundled write)
+        // keep the existing bundled-session path.
+        var talkGroupBankRegions = regions.Where(r => r.Name.StartsWith("TalkGroupList[")).OrderBy(r => r.Name).ToList();
+        var bundledRegions = regions.Where(r => !r.Name.StartsWith("TalkGroupList[")).ToList();
+        var totalSessions = 1 + talkGroupBankRegions.Count;
+        var sessionStep = 0;
+
+        var result = await Task.Run(() =>
+        {
+            using var auditLog = WriteSessionAuditLog.Start(
+                Path.Combine(sessionFolder, "audit.jsonl"), "sync-reference-data", port, deviceId, toolVersion);
+            var committed = false;
+            try
+            {
+                using (var radio = new AnyToneD878Transport(port))
+                {
+                    radio.Open();
+                    radio.StartProgrammingSession();
+                    radio.ReadDeviceId();
+
+                    sessionStep++;
+                    var started = DateTime.Now;
+                    AnyToneD878CodeplugWriter.WriteSafeRegions(radio, bundledRegions, (region, index, total, written, totalW) =>
+                    {
+                        var elapsed = DateTime.Now - started;
+                        if (index % 10 == 0 || index == total)
+                            Log($"  [{index}/{total}] {region.Name} - {written:N0}/{totalW:N0} bytes, {elapsed.TotalSeconds:F0}s elapsed");
+                        SetProgress(written, totalW, $"Restart {sessionStep}/{totalSessions} - writing reference data... [{index}/{total}] ({written:N0}/{totalW:N0} bytes, {elapsed.TotalMinutes:F1}m elapsed)");
+                        auditLog.LogRegion(region.Name, region.Address, region.Data.Length, "written");
+                    });
+
+                    Log("Ending programming session (radio will drop off USB and re-enumerate)...");
+                    radio.EndProgrammingSession();
+                }
+                committed = true;
+                auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
+
+                var bankFailures = new List<string>();
+                foreach (var bankRegion in talkGroupBankRegions)
+                {
+                    sessionStep++;
+                    SetBusy(true, $"Restart {sessionStep}/{totalSessions} - writing and verifying {bankRegion.Name}...");
+                    const int maxBytesPerSession = 200_000; // each bank is at most 100,000 bytes - one chunk per bank
+                    var verified = AnyToneD878CodeplugWriter.WriteRegionChunkedAndVerify(port, bankRegion, maxBytesPerSession, msg =>
+                    {
+                        Log($"  {msg}");
+                        auditLog.LogNote(msg);
+                    });
+                    if (verified)
+                        auditLog.LogRegion(bankRegion.Name, bankRegion.Address, bankRegion.Data.Length, "written and verified");
+                    else
+                        bankFailures.Add(bankRegion.Name);
+                }
+
+                if (bankFailures.Count > 0)
+                {
+                    var message = $"{bankFailures.Count} talkgroup bank(s) did not verify correctly: {string.Join(", ", bankFailures)}.";
+                    auditLog.End("failed", message);
+                    return (Success: false, Message: message);
+                }
+
+                auditLog.End("success");
+                return (Success: true, Message: $"Sync complete - {regions.Count} regions, {totalBytes:N0} bytes.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error: {ex.Message}");
+                if (committed)
+                    Log("The write had already committed to the radio before this error.");
+                auditLog.End("failed", ex.Message);
+                return (Success: false, Message: ex.Message);
+            }
+        });
+
+        if (result.Success)
+        {
+            using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "UPDATE RadioSettings SET LastSyncedContactCount = $count, LastSyncedMaxContactId = $maxId WHERE Id = 1;";
+            cmd.Parameters.AddWithValue("$count", fingerprint.Count);
+            cmd.Parameters.AddWithValue("$maxId", fingerprint.MaxId);
+            cmd.ExecuteNonQuery();
+        }
+
+        SetRebootNoticeVisible(false);
+        SetComplete(result.Success, result.Message);
+        SetBusy(false);
+        if (result.Success) await WatchRadioSettleAsync(port, "after the sync");
     }
 
     /// <summary>Captures the same read-only region dump used for Backup/pre-write baselines and
@@ -927,6 +1494,11 @@ public sealed partial class RadioPage : Page
         SetConnectionStatus(true, DescribeDevice(deviceId, port));
         SetBusy(false);
 
+        // Same fix as Write Codeplug: the identify session above already ended, so the radio is
+        // mid re-enumerate right now - start waiting for it in the background while the confirm
+        // dialog is up, rather than reopening the port with no wait right after it closes.
+        var settleTask = WatchRadioSettleAsync(port, "after being detected");
+
         var notesBox = new TextBox
         {
             AcceptsReturn = true,
@@ -961,6 +1533,8 @@ public sealed partial class RadioPage : Page
         };
         if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
 
+        await settleTask;
+
         var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var safeDeviceId = string.Join("_", deviceId.Split(Path.GetInvalidFileNameChars()));
         var sessionFolder = Path.Combine(AppPaths.DiagnosticsDirectory, $"{stamp}_sample_{safeDeviceId}");
@@ -980,9 +1554,9 @@ public sealed partial class RadioPage : Page
                 radio.ReadDeviceId();
                 var results = AnyToneD878MemoryDumper.Dump(radio,
                     Path.Combine(sessionFolder, "sample.bin"), Path.Combine(sessionFolder, "sample.manifest.csv"),
-                    (region, index, total) =>
+                    (region, index, total, bytesDone, totalBytes) =>
                     {
-                        SetProgress(index, total, $"Reading... [{index}/{total}] {region.Name}");
+                        SetProgress(bytesDone, totalBytes, $"Reading... [{index}/{total}] {region.Name} ({bytesDone:N0}/{totalBytes:N0} bytes)");
                         if (index % 40 == 0 || index == total) Log($"  [{index}/{total}] {region.Name}");
                     });
                 radio.EndProgrammingSession();
@@ -1001,7 +1575,7 @@ public sealed partial class RadioPage : Page
         if (!readResult.Success)
         {
             SetComplete(false, $"Read failed: {readResult.Message}");
-            await WatchRadioSettleAsync(port);
+            await WatchRadioSettleAsync(port, "after the read attempt");
             return;
         }
 
@@ -1033,6 +1607,6 @@ public sealed partial class RadioPage : Page
             SetComplete(false, $"Failed to upload sample: {ex.Message}");
         }
         SetBusy(false);
-        await WatchRadioSettleAsync(port);
+        await WatchRadioSettleAsync(port, "after the read");
     }
 }

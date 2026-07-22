@@ -79,11 +79,16 @@ public sealed partial class ZonesPage : Page
 
     private void OnZoneSelectionChanged(object sender, SelectionChangedEventArgs e) => LoadChannels();
 
-    private void LoadChannels()
+    /// <param name="actionResult">A just-completed action's description (e.g. "Removed
+    /// 'Home-UK'.") to show alongside the fresh count - without this, add/remove/reorder gave no
+    /// visible confirmation beyond the list silently redrawing, easy to miss and no way to tell
+    /// whether it actually worked short of counting rows by eye.</param>
+    private void LoadChannels(string? actionResult = null)
     {
         if (SelectedZoneName is not { } zoneName)
         {
             ChannelListView.ItemsSource = null;
+            ChannelHintText.Text = "Select a zone, then add/reorder/remove its channels.";
             return;
         }
 
@@ -118,6 +123,9 @@ public sealed partial class ZonesPage : Page
             }
 
             ChannelListView.ItemsSource = rows;
+            ChannelHintText.Text = actionResult is not null
+                ? $"{actionResult} Zone now has {rows.Count} channel(s)."
+                : $"{rows.Count} channel(s) in this zone.";
         }
         catch (Exception ex)
         {
@@ -219,8 +227,11 @@ public sealed partial class ZonesPage : Page
         var created = await NewChannelDialog.ShowAsync(this.XamlRoot, db, zoneId, zoneName);
         if (created)
         {
-            LoadChannels();
+            // LoadZones first, not after - it reselects the zone in ZoneListView, which re-fires
+            // OnZoneSelectionChanged -> LoadChannels() with no action message, silently clobbering
+            // the confirmation below if this ran the other way around.
             LoadZones(zoneName);
+            LoadChannels("Created new channel.");
         }
     }
 
@@ -246,7 +257,7 @@ public sealed partial class ZonesPage : Page
             insertCmd.Parameters.Add(new SqliteParameter("$channelId", picked.ChannelId));
             insertCmd.ExecuteNonQuery();
 
-            LoadChannels();
+            LoadChannels($"Added '{picked.Name}'.");
         }
         catch (Exception ex)
         {
@@ -266,6 +277,9 @@ public sealed partial class ZonesPage : Page
     {
         if (SelectedZoneName is not { } zoneName) return;
         if ((sender as Button)?.Tag is not int position) return;
+
+        var removedName = (ChannelListView.ItemsSource as IEnumerable<ChannelRow>)
+            ?.FirstOrDefault(r => r.Position == position)?.Name ?? "channel";
 
         try
         {
@@ -292,7 +306,7 @@ public sealed partial class ZonesPage : Page
             }
 
             tx.Commit();
-            LoadChannels();
+            LoadChannels($"Removed '{removedName}'.");
         }
         catch (Exception ex)
         {

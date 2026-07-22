@@ -16,7 +16,14 @@ public sealed record EncodedRegion(string Name, uint Address, byte[] Data);
 /// </summary>
 public static class AnyToneD878CodeplugEncoder
 {
-    private const int ChannelsPerBank = 128;
+    public const int ChannelsPerBank = 128;
+    public const uint ChannelBankBaseAddress = 0x00800000u;
+    public const uint ChannelBankStride = 0x40000u;
+
+    // Shared with AnyToneD878MemoryMap, which needs the exact same length to dump/restore a
+    // ChannelBank[] region byte-for-byte - see EncodeChannels' remarks on why channels and TX
+    // Color Code must always be read/written together as one region.
+    public static int ChannelBankChannelsLength(int bank) => bank == 31 ? 2176 : ChannelsPerBank * 64;
 
     // TalkGroupRecordCodec's DMR ID field is 3-byte BCD (confirmed against real device dumps) -
     // a hard hardware ceiling on this radio, not a project limitation. TGIF in particular hosts
@@ -26,7 +33,12 @@ public static class AnyToneD878CodeplugEncoder
     // here either.
     private const long MaxTalkGroupDmrId = 999_999;
 
-    public static List<EncodedRegion> Build(SqliteConnection db, List<string>? warnings = null)
+    // Whether a routine Write Codeplug also pushes the talkgroup list (Contacts/TalkGroupList) -
+    // defaults to false. That list is now 5,718+ entries and changes rarely, while routine writes
+    // (renaming a channel, tweaking a zone) happen often - bundling the two meant every small edit
+    // re-uploaded the whole reference list. See BuildTalkGroupsOnly for the separate, deliberate
+    // "Sync Reference Data" path this now lives in instead (RadioPage).
+    public static List<EncodedRegion> Build(SqliteConnection db, List<string>? warnings = null, bool includeTalkGroups = false)
     {
         var regions = new List<EncodedRegion>();
 
@@ -42,11 +54,35 @@ public static class AnyToneD878CodeplugEncoder
         if (scanListsEnabled) regions.AddRange(EncodeScanLists(db));
         if (groupListsEnabled) regions.AddRange(EncodeGroupLists(db, contactIndex));
         if (roamingEnabled) regions.AddRange(EncodeRoaming(db));
-        regions.AddRange(EncodeTalkGroups(db, contactIndex));
+        if (includeTalkGroups) regions.AddRange(EncodeTalkGroups(db, contactIndex));
         regions.AddRange(EncodeRadioIds(db, radioIdIndex));
         regions.AddRange(EncodeRadioSettings(db));
 
         return regions;
+    }
+
+    /// <summary>The talkgroup-list half of a write, on its own - what "Sync Reference Data" uses.
+    /// contactIndex still has to be recomputed here (it's derived purely from the Contacts table,
+    /// same result either way) since routine Write Codeplug no longer computes it for this purpose.</summary>
+    public static List<EncodedRegion> BuildTalkGroupsOnly(SqliteConnection db, List<string>? warnings = null)
+    {
+        var contactIndex = BuildContactIndex(db, warnings);
+        return EncodeTalkGroups(db, contactIndex).ToList();
+    }
+
+    /// <summary>A cheap fingerprint of "what BuildContactIndex would currently produce" - (count,
+    /// max Id) among contacts eligible for the talkgroup list. Every eligible contact gets a
+    /// sequential index by Id order, so ANY add/remove (not just ones a channel happens to
+    /// reference) shifts every later contact's index - comparing this against what was true as of
+    /// the last Sync Reference Data run is how a stale write gets caught before it happens, rather
+    /// than producing the old TG1-fallback-style bug silently.</summary>
+    public static (long Count, long MaxId) GetContactIndexFingerprint(SqliteConnection db)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*), MAX(Id) FROM Contacts WHERE DmrId IS NULL OR DmrId <= {MaxTalkGroupDmrId};";
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read() || reader.IsDBNull(1)) return (0, 0);
+        return (reader.GetInt64(0), reader.GetInt64(1));
     }
 
     // "Disabled" means don't write this feature's data to the radio at all - not merely "don't
@@ -134,15 +170,35 @@ public static class AnyToneD878CodeplugEncoder
     // the firmware treats index 0 itself as the sentinel, not as a real contact lookup.
     private const uint NoContactIndex = 0;
 
+    // TX Color Code lives in a SEPARATE per-channel table, not the 64-byte channel record
+    // itself - discovered 2026-07-21 via a live RF decode (DSDPlus) proving the radio
+    // transmits a different color code than the per-channel byte this encoder writes, then
+    // pinpointed by a clean before/after USB write capture: one byte per channel, at the
+    // SAME 64-byte stride as the primary channel record, offset +3, starting immediately
+    // after each bank's primary 8192-byte region (i.e. bankBase + 0x2000 + slot*64 + 3).
+    // AnyTone firmware V3.06+ (2025-1-23) split Color Code into separate RX/TX fields (CPS
+    // UI, not modeled by qdmr) - this encoder only ever wrote the RX one (channel record
+    // byte 32). Critically, this table sits in the SAME 256KB flash erase block as the
+    // primary channel bank (both bank-base-aligned), so every Channels[] write already
+    // erases it - this encoder just never knew to repopulate it, silently leaving TX Color
+    // Code erased (reads back as 0xF nibble = 15, a plausible-looking but wrong value the
+    // radio then actually transmits on). Defaults to the SAME value as RX Color Code,
+    // matching RT Systems' own default behavior (and AnyTone CPS's own migration prompt
+    // when loading a codeplug from before this field existed).
+    public const int TxColorCodeTableOffset = 0x2000;
+    private const int TxColorCodeByteOffsetInSlot = 3;
+
     private static IEnumerable<EncodedRegion> EncodeChannels(SqliteConnection db, Dictionary<long, uint> contactIndex, Dictionary<long, byte> radioIdIndex, Dictionary<long, byte> scanListIndex, Dictionary<long, byte> groupListIndex, bool scanListsEnabled, bool groupListsEnabled, List<string>? warnings)
     {
         var banks = new Dictionary<int, byte[]>();
-        int BankLength(int bank) => bank == 31 ? 2176 : ChannelsPerBank * 64;
+        var txColorCodeBanks = new Dictionary<int, byte[]>();
+        int BankLength(int bank) => ChannelBankChannelsLength(bank);
 
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT ChannelNumber, Name, Mode, RxFrequencyHz, TxFrequencyHz, Bandwidth, Power,
-                   ColorCode, TimeSlot, ContactId, RadioIdId, ScanListId, GroupListId
+                   ColorCode, TimeSlot, ContactId, RadioIdId, ScanListId, GroupListId,
+                   ExtraAttributesJson
             FROM Channels;
             """;
         using var reader = cmd.ExecuteReader();
@@ -179,16 +235,41 @@ public static class AnyToneD878CodeplugEncoder
                 RadioIdIndex: reader.IsDBNull(10) ? (byte)0 : radioIdIndex.GetValueOrDefault(reader.GetInt64(10)),
                 ScanListIndex: !scanListsEnabled || reader.IsDBNull(11) ? null : scanListIndex.GetValueOrDefault(reader.GetInt64(11)),
                 GroupListIndex: !groupListsEnabled || reader.IsDBNull(12) ? null : groupListIndex.GetValueOrDefault(reader.GetInt64(12)),
-                Name: channelName);
+                Name: channelName,
+                ThroughMode: IsDmoSimplex(reader.IsDBNull(13) ? null : reader.GetString(13)));
 
             if (!banks.TryGetValue(bank, out var buffer))
                 banks[bank] = buffer = new byte[BankLength(bank)];
 
             ChannelRecordCodec.Encode(record).CopyTo(buffer, slot * 64);
+
+            if (!txColorCodeBanks.TryGetValue(bank, out var txBuffer))
+                txColorCodeBanks[bank] = txBuffer = new byte[BankLength(bank)];
+            txBuffer[slot * 64 + TxColorCodeByteOffsetInSlot] = record.ColorCode;
         }
 
+        // Re-enabled 2026-07-22, but NOT as a separate region like the disabled attempt on
+        // 2026-07-21: Channels[bank] and its TX Color Code table share the same 256KB flash
+        // erase block (see the remarks above), and WriteMemory only commits atomically at
+        // EndProgrammingSession - so a LATER, separate session touching that same block (as
+        // WriteRegionChunkedAndVerify would do, same as it already does for TalkGroupList)
+        // would re-erase whatever the earlier session had just committed to it, exactly like
+        // the ZoneChannelDefaults/GeneralUsedBitmapsBlock disturb found on 2026-07-19.
+        // TalkGroupList is safe with that isolated-session pattern only because nothing else
+        // shares its block; channels don't have that luxury. Instead, both halves are combined
+        // into ONE region per bank here (channel table at offset 0, color code table at
+        // TxColorCodeTableOffset, immediately contiguous) so they always commit together in a
+        // single session - see AnyToneD878CodeplugWriter's ChannelBank[] handling, which pulls
+        // this whole region out of the big bundled write (fixing the original ~205KB->230KB
+        // session-size overflow too) and gives each bank its own small isolated write+verify.
         foreach (var (bank, buffer) in banks)
-            yield return new EncodedRegion($"Channels[{bank}]", 0x00800000u + (uint)(bank * 0x40000), buffer);
+        {
+            var combined = new byte[TxColorCodeTableOffset + BankLength(bank)];
+            buffer.CopyTo(combined, 0);
+            if (txColorCodeBanks.TryGetValue(bank, out var txBuffer))
+                txBuffer.CopyTo(combined, TxColorCodeTableOffset);
+            yield return new EncodedRegion($"ChannelBank[{bank}]", ChannelBankBaseAddress + (uint)bank * ChannelBankStride, combined);
+        }
     }
 
     private static byte PowerLevelFromText(string? power) => power?.ToLowerInvariant() switch
@@ -199,6 +280,25 @@ public static class AnyToneD878CodeplugEncoder
         "turbo" => 3,
         _ => 2,
     };
+
+    // True when the imported RT Systems "DMR Mode" attribute is "DMO Simplex" (Direct Mode
+    // Operation) rather than "Repeater" - i.e. a simplex hotspot channel that needs throughMode set.
+    // See ChannelRecord.ThroughMode's remarks for why this matters (the MMDVM-hotspot fix).
+    private static bool IsDmoSimplex(string? extraAttributesJson)
+    {
+        if (string.IsNullOrEmpty(extraAttributesJson))
+            return false;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(extraAttributesJson);
+            return doc.RootElement.TryGetProperty("DMR Mode", out var mode)
+                && mode.GetString()?.Contains("Simplex", StringComparison.OrdinalIgnoreCase) == true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
 
     // ZoneAChannel (0x02500100) and ZoneBChannel (0x02500300) - the default displayed channel per
     // zone - are NOT emitted here. They live inside a 256KB flash erase block (0x02500000-
@@ -386,7 +486,15 @@ public static class AnyToneD878CodeplugEncoder
     // up to 0x1900 bytes and leaves its own block's tail as a smaller, still-open, deliberately
     // separate risk (not repeated here now that the failure mode is fully understood).
     public const uint RoamingBlockAddress = 0x01040000;
-    public const int RoamingBlockLength = 0x40000; // the FULL erase block, not just documented sections
+    // USED EXTENT, not the full 0x40000 erase block (2026-07-21). Writing the full 256KB in one
+    // session was proven on real hardware to be unreliable - the write either hangs the radio past
+    // the 45s re-enumerate timeout or silently fails to commit (same >~100KB single-session ceiling
+    // the talkgroup list hit). The flash still erases the WHOLE 256KB block when any byte in it is
+    // written, but we only need to REPROGRAM up to the last meaningful address: RoamingZones ends at
+    // offset 0x3000+0x2000 = 0x5000, and official AnyTone CPS's own USB capture writes nothing in
+    // this block past 0x1043080. Everything beyond 0x5000 is 0xFF/unused, exactly as CPS leaves it,
+    // so erasing it is correct. Reprogramming ~20KB instead of 256KB commits reliably in one session.
+    public const int RoamingBlockLength = 0x5000;
     public static readonly string[] RoamingBlockRegionNames = ["RoamingChannels", "RoamingChannelsUsed", "RoamingZonesUsed", "RoamingZones"];
     public const int RoamingChannelsOffset = 0x0000;
     public const int RoamingChannelsUsedOffset = 0x2000;
@@ -407,7 +515,16 @@ public static class AnyToneD878CodeplugEncoder
     // other two shared blocks: splice into one live-read/write-back instead of three standalone
     // writes.
     public const uint GeneralUsedBitmapsBlockAddress = 0x024C0000;
-    public const int GeneralUsedBitmapsBlockLength = 0x40000;
+    // USED EXTENT, not the full 0x40000 erase block (2026-07-21) - see RoamingBlockLength's remarks
+    // for the full rationale. This block is the WORST offender: at the full 256KB it consistently
+    // failed to verify (3/3 attempts) and hung the radio past the 45s re-enumerate timeout. The real
+    // content runs from 0x024C0000 (FiveTone/TwoTone/DTMF tables, AlarmSettings, the used-bitmaps,
+    // EncryptionIds a.k.a. qdmr's channelBitmap at 0x1500, EncryptionKeys, AutoRepeaterOffsets) up
+    // to AesEncryptionKeys ending ~0x024C7FC0; official AnyTone CPS writes nothing past 0x024C8020.
+    // 0x8100 covers all of it with margin; the 0xFF tail beyond is erased exactly as CPS leaves it.
+    // Reprogramming ~33KB instead of 256KB commits reliably in one session, and (critically) still
+    // preserves everything this encoder doesn't model - the whole point of the read-modify-write.
+    public const int GeneralUsedBitmapsBlockLength = 0x8100;
     public static readonly string[] GeneralUsedBitmapsBlockRegionNames = ["ZonesUsed", "ScanListsUsed", "RadioIdListUsed"];
 
     private static IEnumerable<EncodedRegion> EncodeRoaming(SqliteConnection db)
@@ -622,36 +739,57 @@ public static class AnyToneD878CodeplugEncoder
         yield return new EncodedRegion($"{SharedBlockRegionPrefix}AprsSlot", 0x02500000u + AprsSlotOffset, [slotRaw]);
     }
 
+    // The talkgroup list is NOT one flat contiguous array - confirmed against qdmr's reverse-
+    // engineered memory map (d868uv_codeplug.hh/.cc, the shared base class the D878UV also uses):
+    // contacts are organized into banks of up to 1000, with banks spaced 0x40000 (256KB) apart:
+    //   bank = index / 1000;  addr = ContactBanksBaseAddress + bank*BetweenContactBanks + (index%1000)*100
+    // ("bank_addr = contactBanks() + (i/contactsPerBank())*betweenContactBanks(); addr = bank_addr
+    // + (i%contactsPerBank())*ContactElement::size()" in d868uv_codeplug.cc). Treating this as one
+    // flat array (writing every record contiguously from 0x02680000) is what caused real,
+    // reproducible data placement corruption on hardware 2026-07-19 - any index >= 1000 lands at a
+    // wildly wrong physical address once real bank 1 (0x026C0000) doesn't line up with where a
+    // flat model would put contact #1000 (0x02680000 + 100,000). This only ever surfaced once the
+    // talkgroup count grew past 1000 - smaller earlier syncs never exercised the bug.
+    private const int ContactsPerBank = 1000;
+    private const uint ContactBanksBaseAddress = 0x02680000;
+    private const uint BetweenContactBanks = 0x00040000;
+
     private static IEnumerable<EncodedRegion> EncodeTalkGroups(SqliteConnection db, Dictionary<long, uint> contactIndex)
     {
-        // +1 for the reserved index-0 slot (NoContactIndex in EncodeChannels) - real contacts
-        // occupy contactIndex.Count entries starting at index 1, so the buffer needs room for
-        // indices 0..contactIndex.Count inclusive.
-        var contactCount = contactIndex.Count + 1;
-        // Only the used portion of the list is written - see the writer method's remarks for why.
-        // Rounded up to a 16-byte boundary since writes must be in exactly-16-byte chunks; the
-        // few trailing pad bytes beyond the last real record stay zero, which is harmless since
-        // the used bitmap is the authority on which slots are real.
-        var listLength = ((contactCount * 100) + 15) / 16 * 16;
-        var listBuffer = new byte[listLength];
         var usedBuffer = new byte[1264];
         Array.Fill(usedBuffer, (byte)0xFF); // inverted convention: 1 = not used
 
         var controlBuffer = new byte[10000 * 4];
         Array.Fill(controlBuffer, (byte)0xFF); // 0xFFFFFFFF = empty slot
 
-        // The doc notes "more management information at 0x04340000 when writing" talk groups.
-        // The actual root cause of TalkGroupList writes being silently ACKed-but-discarded turned
-        // out to be size (writing the full 10,000-slot/1MB region in one go, versus writing only
-        // the used ~23 entries, which is what fixed it) - this offset table was tried first and
-        // kept since it's cheap and doc-specified, but wasn't independently proven necessary once
-        // the real fix (writing less data) was found. Each entry is the DMR ID BCD-digits-as-
-        // hex-value, left-shifted 1 bit with bit0 set for group calls, plus the 0-based list
-        // position, both 4-byte little-endian, sorted ascending by the key.
+        // Real DMR-ID-to-contact-index lookup table the radio actually uses for call routing.
+        // This project originally wrote a guessed version of this table at 0x04340000, based only
+        // on an ambiguous doc phrase never independently confirmed - that's the base D868UV class's
+        // address (qdmr's d868uv_codeplug.hh contactIdTable()). The D878UV II Plus (this radio)
+        // overrides it to 0x04800000 (qdmr's d878uv2_codeplug.hh) - a real per-model difference
+        // this project missed, causing a real-hardware TX-misrouting bug (channel display correct,
+        // actual transmitted talkgroup wrong) on 2026-07-20: nothing had ever written correct data
+        // to the address this exact model actually reads, leaving stale/unmanaged data driving call
+        // routing regardless of what the rest of this encoder correctly wrote. Confirmed against RT
+        // Systems' own captured USB traffic: 784 sequential 16-byte writes (=1,568 entries, matching
+        // RT Systems' known list size) at 0x04800000, decoded entries matching this exact key format
+        // (BCD-shifted-by-1-plus-group-flag, sorted ascending). See [[project_anytone_878_codeplug]].
+        //
+        // Sorted ascending by key; qdmr (lib/d868uv_codeplug.cc encodeContacts, shared by the II
+        // Plus subclass) always appends one guaranteed 0xFFFFFFFF/0xFFFFFFFF terminator beyond the
+        // real entries (from its initial memset), regardless of whether the real count is odd or
+        // even - matched here rather than only padding for 16-byte alignment.
         var offsetEntries = new List<(uint Key, uint Position)>();
 
+        // Each bank gets a full-size (1000-record/100,000-byte) buffer the first time any index in
+        // it is seen - simpler than trimming to the exact used size per bank, and 100,000 bytes is
+        // comfortably under the size that's separately confirmed safe to write in one session
+        // (a smaller single-session write worked historically; ~558,000 bytes in one region did
+        // not - see WriteRegionChunkedAndVerify's remarks).
+        var banks = new Dictionary<int, byte[]>();
+
         using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT Id, Name, DmrId FROM Contacts ORDER BY Id;";
+        cmd.CommandText = "SELECT Id, Name, DmrId, CallType FROM Contacts ORDER BY Id;";
         using var reader = cmd.ExecuteReader();
         var syntheticId = 999_901u; // placeholder range for contacts with no real DMR ID (e.g. PARROT, Echo Test)
         while (reader.Read())
@@ -663,35 +801,43 @@ public static class AnyToneD878CodeplugEncoder
             if (!contactIndex.TryGetValue(id, out var indexValue)) continue;
             var index = (int)indexValue;
             var name = reader.GetString(1);
+            var isGroupCall = reader.GetString(3) != "Private";
             // Contacts without a real DMR ID (non-numeric names like "PARROT") get a distinct
             // synthetic placeholder rather than all sharing 0 - the offset table below is keyed
             // by this value, and duplicate keys there would collide/be ambiguous to the firmware.
             var dmrId = reader.IsDBNull(2) ? syntheticId++ : (uint)reader.GetInt64(2);
 
-            TalkGroupRecordCodec.Encode(new TalkGroupRecord(name, dmrId)).CopyTo(listBuffer, index * 100);
+            var bank = index / ContactsPerBank;
+            var slot = index % ContactsPerBank;
+            if (!banks.TryGetValue(bank, out var buffer))
+                banks[bank] = buffer = new byte[ContactsPerBank * 100];
+
+            TalkGroupRecordCodec.Encode(new TalkGroupRecord(name, dmrId, isGroupCall)).CopyTo(buffer, slot * 100);
             ClearBit(usedBuffer, index); // 0 = used, per the inverted convention confirmed against real data
             WriteUInt32LE(controlBuffer, index * 4, (uint)index);
 
             var bcdKey = BcdDigitsAsHexValue(dmrId, 4);
-            var shiftedKey = (bcdKey << 1) | 1u; // TalkGroupRecordCodec always writes Group Call entries
+            var shiftedKey = (bcdKey << 1) | (isGroupCall ? 1u : 0u);
             offsetEntries.Add((shiftedKey, (uint)index));
         }
 
         offsetEntries.Sort((a, b) => a.Key.CompareTo(b.Key));
+        offsetEntries.Add((0xFFFFFFFF, 0xFFFFFFFF));
         if (offsetEntries.Count % 2 != 0)
-            offsetEntries.Add((0xFFFFFFFF, 0xFFFFFFFF)); // pad to a full 16-byte (2-entry) write chunk, per doc
+            offsetEntries.Add((0xFFFFFFFF, 0xFFFFFFFF));
 
-        var offsetBuffer = new byte[offsetEntries.Count * 8];
+        var contactIdTableBuffer = new byte[offsetEntries.Count * 8];
         for (var i = 0; i < offsetEntries.Count; i++)
         {
-            WriteUInt32LE(offsetBuffer, i * 8, offsetEntries[i].Key);
-            WriteUInt32LE(offsetBuffer, i * 8 + 4, offsetEntries[i].Position);
+            WriteUInt32LE(contactIdTableBuffer, i * 8, offsetEntries[i].Key);
+            WriteUInt32LE(contactIdTableBuffer, i * 8 + 4, offsetEntries[i].Position);
         }
 
         yield return new EncodedRegion("TalkGroupListUsed", 0x02640000, usedBuffer);
         yield return new EncodedRegion("TalkGroupsControlData", 0x02600000, controlBuffer);
-        yield return new EncodedRegion("TalkGroupOffsets", 0x04340000, offsetBuffer);
-        yield return new EncodedRegion("TalkGroupList", 0x02680000, listBuffer);
+        yield return new EncodedRegion("ContactIdTable", 0x04800000, contactIdTableBuffer);
+        foreach (var (bank, buffer) in banks.OrderBy(kv => kv.Key))
+            yield return new EncodedRegion($"TalkGroupList[{bank}]", ContactBanksBaseAddress + (uint)bank * BetweenContactBanks, buffer);
     }
 
     private static uint BcdDigitsAsHexValue(long decimalValue, int byteCount)

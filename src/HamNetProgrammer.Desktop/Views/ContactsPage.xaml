@@ -8,6 +8,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -16,26 +17,28 @@
             <TextBlock x:Name="SummaryText" FontSize="12" Foreground="#8896a0" VerticalAlignment="Center" />
         </StackPanel>
 
-        <StackPanel Grid.Row="1" Spacing="12" MaxWidth="900" HorizontalAlignment="Left">
-            <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="Import talkgroups" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                    <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                               Text="Pulls the shared talkgroup list (Brandmeister, TGIF, and FreeDMR merged and deduped by number) from our backend, so every install uses the same reference. Network is recorded only as where each contact's data came from." />
-                    <Button x:Name="ImportButton" Content="Import Talkgroups" Click="OnImportClicked" HorizontalAlignment="Left" />
-                    <TextBlock x:Name="ImportStatusText" FontSize="12" Foreground="#6bb0b8" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
+        <Border Grid.Row="1" Background="#1a232c" CornerRadius="6" Padding="14" MaxWidth="900" HorizontalAlignment="Left" Margin="0,0,0,12">
+            <StackPanel Spacing="6">
+                <TextBlock Text="About Contacts" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                           Text="Search covers all three networks (Brandmeister, TGIF, FreeDMR) live - nothing to import by hand, and picking a result adds just that one talkgroup. Only FreeDMR refreshes into your local list automatically (the network your hotspot actually uses), which is also all that gets synced to the radio - keeps the on-device talkgroup list from growing large enough to freeze its own browser, as happened once before. Anything below, a talkgroup or one of your own contacts, can be picked for a channel in the channel editor (Group Call / Private Call). Individuals can also be dialled directly from the radio and shown for caller ID, once written." />
+            </StackPanel>
+        </Border>
 
-            <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="Search" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                    <TextBox x:Name="SearchBox" PlaceholderText="Type a name or talkgroup number..." TextChanged="OnSearchTextChanged" />
+        <Border Grid.Row="2" Background="#1a232c" CornerRadius="6" Padding="14" MaxWidth="900" HorizontalAlignment="Left" Margin="0,0,0,12">
+            <StackPanel Spacing="8">
+                <TextBlock Text="Search" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <RadioButton x:Name="TalkgroupsModeRadio" Content="Talkgroups" GroupName="SearchMode" IsChecked="True" Checked="OnModeChanged" />
+                    <RadioButton x:Name="MyContactsModeRadio" Content="My Contacts" GroupName="SearchMode" Checked="OnModeChanged" />
                 </StackPanel>
-            </Border>
-        </StackPanel>
+                <RadioButtons x:Name="NetworkFilter" SelectionChanged="OnNetworkFilterChanged" />
+                <TextBox x:Name="SearchBox" PlaceholderText="Type a name or talkgroup number..." TextChanged="OnSearchTextChanged" />
+                <TextBlock x:Name="SearchStatusText" FontSize="12" Foreground="#6bb0b8" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
 
-        <Border Grid.Row="2" Background="#1a232c" CornerRadius="6" Margin="0,14,0,0">
+        <Border Grid.Row="3" Background="#1a232c" CornerRadius="6">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -45,12 +48,16 @@
                 <Grid Grid.Row="0" Background="#212c36" Padding="10,6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
                         <ColumnDefinition Width="120" />
                         <ColumnDefinition Width="140" />
+                        <ColumnDefinition Width="130" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Name" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
-                    <TextBlock Grid.Column="1" Text="DMR ID" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
-                    <TextBlock Grid.Column="2" Text="Network" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="1" Text="Type" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="2" Text="DMR ID" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
+                    <TextBlock x:Name="DetailColumnHeader" Grid.Column="3" Text="Network" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="4" Text="" FontSize="11" Foreground="#8896a0" FontWeight="SemiBold" />
                 </Grid>
 
                 <ListView x:Name="ResultsListView" Grid.Row="1" Padding="4" SelectionMode="None">
@@ -59,13 +66,23 @@
                             <Grid Padding="10,4">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="90" />
                                     <ColumnDefinition Width="120" />
                                     <ColumnDefinition Width="140" />
+                                    <ColumnDefinition Width="130" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="12" Foreground="#dce6ea"
                                            TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
-                                <TextBlock Grid.Column="1" Text="{Binding DmrIdDisplay}" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" />
-                                <TextBlock Grid.Column="2" Text="{Binding NetworkDisplay}" FontSize="12" Foreground="#8896a0" />
+                                <TextBlock Grid.Column="1" Text="{Binding CallType}" FontSize="12" Foreground="#6bb0b8" />
+                                <TextBlock Grid.Column="2" Text="{Binding DmrIdDisplay}" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" />
+                                <TextBlock Grid.Column="3" Text="{Binding Detail}" FontSize="12" Foreground="#8896a0"
+                                           TextTrimming="CharacterEllipsis" />
+                                <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+                                    <Button Content="Add" FontSize="11" Padding="8,3" Tag="{Binding}"
+                                            Click="OnAddClicked" Visibility="{Binding AddButtonVisibility}" />
+                                    <Button Content="Remove" FontSize="11" Padding="8,3" Tag="{Binding}"
+                                            Click="OnRemoveClicked" Visibility="{Binding RemoveButtonVisibility}" />
+                                </StackPanel>
                             </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>

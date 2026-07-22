@@ -18,7 +18,9 @@
                         AT-D878UV. It stores your whole codeplug in an open SQLite database, so
                         Zones, Scan Lists, Group Lists and Roaming Zones stay linked by identity
                         and survive reorganizing your channels. If it's useful to you, the
-                        Support button funds continued development.
+                        Support button funds continued development - and Follow us on Facebook
+                        for updates on this and the other tools in the same series (PacketCluster/
+                        Ham Net Global, SOARC Globe).
                     </TextBlock>
                 </StackPanel>
             </Border>
@@ -29,7 +31,24 @@
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
                         Create, rename and delete zones, add or remove channels, and reorder
                         them. Edit any channel's full field set, with a searchable talkgroup
-                        picker that can create a new talkgroup on the fly.
+                        picker that can create a new talkgroup on the fly. A channel's Scan List/
+                        Group List fields here are a per-channel property (which list activates
+                        when you scan or receive on THIS channel) - not the same thing as list
+                        membership, which is edited on the Scan Lists/Group Lists pages themselves.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Channels" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        Every channel across all zones in one list, independent of zone - search,
+                        edit, or delete any channel outright (not just remove it from one zone),
+                        and filter to channels that aren't in any zone at all. "New Channel..."
+                        here creates a blank channel with no zone to inherit settings from; adding
+                        it to a zone afterwards is a separate step (Add Existing Channel on the
+                        Zones page).
                     </TextBlock>
                 </StackPanel>
             </Border>
@@ -48,11 +67,29 @@
                 <StackPanel Spacing="6">
                     <TextBlock Text="Contacts" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
-                        Digital talkgroups. Import pulls a shared, pre-merged list (Brandmeister,
-                        TGIF and FreeDMR combined and deduped by number - the radio has no concept
-                        of "network", so the same talkgroup number is always one contact, not
-                        several) from our backend, so every install stays consistent. Search finds
-                        any imported or manually-created contact by name or number.
+                        The Talkgroups / My Contacts toggle switches what the search box searches:
+                        talkgroups (searched live across all three networks - Brandmeister, TGIF,
+                        FreeDMR - with a filter to narrow to one), or your own individually-added
+                        contacts (search radioid.net and add anyone by callsign or name). Only
+                        FreeDMR refreshes into your local list automatically on app launch - the
+                        network your hotspot actually uses, and all that gets synced to the radio,
+                        to keep the on-device talkgroup list from growing large enough to freeze
+                        its own browser (happened once before). Picking any search result, local or
+                        not, adds just that one talkgroup. Either kind can be picked for a channel
+                        from the channel editor.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Radio IDs" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        Your own callsign(s) and DMR ID(s) - what a channel transmits with, if you
+                        have more than one programmed. "Look Up from radioid.net" fills in the DMR
+                        ID for you from your callsign, so you don't need to know it by heart. A
+                        radio you've already read from will have these filled in automatically;
+                        this page is for setting one up from scratch.
                     </TextBlock>
                 </StackPanel>
             </Border>
@@ -91,7 +128,7 @@
                         Connects to the AT-D878UV over its USB programming cable.
                     </TextBlock>
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,0">
-                        <Run Text="Write Codeplug to Radio" FontWeight="SemiBold" Foreground="#dce6ea" /> writes the current codeplug, with live progress. A full memory backup is taken automatically just before, and again just after, so nothing is at risk without a way back.
+                        <Run Text="Write Codeplug to Radio" FontWeight="SemiBold" Foreground="#dce6ea" /> writes the current codeplug across several programming sessions, with live progress. The radio restarts itself several times during this - expected, not an error. A full memory backup is taken automatically just before, and again just after, so nothing is at risk without a way back.
                     </TextBlock>
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
                         <Run Text="Backup Radio Memory" FontWeight="SemiBold" Foreground="#dce6ea" /> reads every known memory region to a timestamped file - safe, read-only, independent of writing.
@@ -100,10 +137,33 @@
                         <Run Text="Contribute a Memory-Map Sample" FontWeight="SemiBold" Foreground="#dce6ea" /> is also read-only, but for radios this project has no hardware to validate against (anything other than the AT-D878UV) - it uploads a raw memory capture to help extend real support to that model.
                     </TextBlock>
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
-                        <Run Text="Restore Previous Codeplug" FontWeight="SemiBold" Foreground="#dce6ea" /> undoes the last Write Codeplug run, using the automatic backup taken just before it - available right after a write that actually reached the radio.
+                        <Run Text="Restore Previous Codeplug" FontWeight="SemiBold" Foreground="#dce6ea" /> lets you pick from any past Write Codeplug run, not just the most recent, and writes back exactly what it overwrote using the automatic backup taken just before it. If that write never actually reached the radio, it instead takes a fresh dump and proves the radio still matches the pre-write backup byte-for-byte, rather than just assuming so.
                     </TextBlock>
                     <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
                         <Run Text="Send Diagnostic Report" FontWeight="SemiBold" Foreground="#dce6ea" /> sends the automatic backup and a log of everything written for investigation, if something looks wrong after a write - no need to attach anything yourself.
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1a232c" CornerRadius="8" Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Credits" FontSize="15" FontWeight="Bold" Foreground="#dce6ea" />
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap">
+                        The AT-D878UV's USB protocol and memory layout aren't officially documented
+                        by AnyTone. These open-source projects assisted in the development of this
+                        application:
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap" Margin="8,0,0,0">
+                        <Run Text="&#8226; " /><Hyperlink NavigateUri="https://github.com/hmatuschek/qdmr"><Run Text="hmatuschek/qdmr" /></Hyperlink><Run Text=" - full-featured C++ codeplug editor covering AnyTone, TYT/Retevis, Radioddity and others; also the source for the MD-380-family DFU/TyT protocol and memory layout." />
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap" Margin="8,0,0,0">
+                        <Run Text="&#8226; " /><Hyperlink NavigateUri="https://github.com/reald/anytone-flash-tools"><Run Text="reald/anytone-flash-tools" /></Hyperlink><Run Text=" - Wireshark-derived protocol and memory layout notes, plus a Python radio emulator used for safe testing over a virtual COM port pair." />
+                    </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0">
+                        Talkgroup and DMR ID data comes from the Brandmeister, TGIF and FreeDMR
+                        networks (merged and deduped server-side) and
+                        <Hyperlink NavigateUri="https://radioid.net"><Run Text="radioid.net" /></Hyperlink>'s
+                        public user database. Neither is affiliated with this project.
                     </TextBlock>
                 </StackPanel>
             </Border>

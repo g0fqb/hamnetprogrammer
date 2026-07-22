@@ -62,38 +62,53 @@ public static class NewChannelDialog
         }
         patternReader.Close();
 
+        // A zone maps to one hotspot, which is configured for exactly one DMR network at a time
+        // (confirmed by the user, who runs several MMDVMs, each on a different network) - so a new
+        // channel here should default the talkgroup search to whatever network this zone's other
+        // channels are already using, not "All networks" every time.
+        string? preferredNetwork = null;
+        using (var networkCmd = db.CreateCommand())
+        {
+            networkCmd.CommandText = """
+                SELECT ct.Network FROM ZoneChannels zc
+                JOIN Channels c ON c.Id = zc.ChannelId
+                JOIN Contacts ct ON ct.Id = c.ContactId
+                WHERE zc.ZoneId = $zoneId AND ct.Network IS NOT NULL
+                GROUP BY ct.Network ORDER BY COUNT(*) DESC LIMIT 1;
+                """;
+            networkCmd.Parameters.Add(new SqliteParameter("$zoneId", zoneId));
+            preferredNetwork = networkCmd.ExecuteScalar() as string;
+        }
+
         var hasPattern = rxMhz is not null;
-        var talkGroupPicker = TalkGroupPicker.Build(db, null, "Search, or type a new talkgroup...");
+        var contactPicker = ContactPicker.Build(db, null, preferredNetwork);
         var nameBox = new TextBox { MaxLength = 16 };
         var rxMhzBox = new TextBox { Text = rxMhz?.ToString("F5") ?? "" };
         var txMhzBox = new TextBox { Text = txMhz?.ToString("F5") ?? "" };
-        var colorCodeBox = new TextBox { Text = colorCode.ToString() };
-        var timeSlotBox = new TextBox { Text = timeSlot.ToString() };
-        var powerBox = new TextBox { Text = power };
+        var colorCodeCombo = FormField.ClosedCombo(Enumerable.Range(0, 16).Select(n => n.ToString()).ToList(), colorCode.ToString());
+        var timeSlotCombo = FormField.ClosedCombo(["1", "2"], timeSlot.ToString());
+        var powerCombo = FormField.ClosedCombo(["Low", "Mid", "High", "Turbo"], power);
 
-        // Auto-suggest a channel name from the zone + talkgroup as soon as a talkgroup is picked,
-        // but leave it fully editable - there's no reliable way to reconstruct this codeplug's
-        // established short-suffix naming convention (e.g. "TG2350 United K" -> "Home-UK")
-        // mechanically, so this is a starting point, not a final answer.
-        if (talkGroupPicker.Container is AutoSuggestBox tgBox)
+        // Auto-suggest a channel name from the zone + contact as soon as one is picked, but leave
+        // it fully editable - there's no reliable way to reconstruct this codeplug's established
+        // short-suffix naming convention (e.g. "TG2350 United K" -> "Home-UK") mechanically, so
+        // this is a starting point, not a final answer.
+        contactPicker.OnDisplayChosen = display =>
         {
-            tgBox.SuggestionChosen += (_, args) =>
-            {
-                if (args.SelectedItem is TalkGroupPicker.Option option && string.IsNullOrEmpty(nameBox.Text))
-                    nameBox.Text = SuggestChannelName(zoneName, option.Display);
-            };
-        }
+            if (string.IsNullOrEmpty(nameBox.Text))
+                nameBox.Text = SuggestChannelName(zoneName, display);
+        };
 
         var form = new StackPanel { Spacing = 10 };
-        form.Children.Add(FormField.Row("Talk Group", talkGroupPicker.Container,
-            "The DMR talkgroup for this new channel. Type to search, or type a new one to create it."));
+        form.Children.Add(FormField.Row("Contact", contactPicker.Container,
+            "Group Call for a talkgroup (type to search, or type a new one to create it), or Private Call for a specific person (search callsign/name)."));
         form.Children.Add(FormField.Row("Name", nameBox, "The channel's display name on the radio (max 16 characters)."));
         form.Children.Add(FormField.Row("Rx Frequency (MHz)", rxMhzBox,
             hasPattern ? "Inherited from this zone's other channels." : "This zone has no channels yet, so there's no frequency to inherit - enter one."));
         form.Children.Add(FormField.Row("Tx Frequency (MHz)", txMhzBox, "For a simplex hotspot this is usually the same as Rx."));
-        form.Children.Add(FormField.Row("Color Code", colorCodeBox, "DMR colour code (0-15). Inherited from this zone's other channels."));
-        form.Children.Add(FormField.Row("Repeater Slot", timeSlotBox, "DMR timeslot (1 or 2). Inherited from this zone's other channels."));
-        form.Children.Add(FormField.Row("Tx Power", powerBox, "Transmit power level, e.g. Low / Mid / High / Turbo."));
+        form.Children.Add(FormField.Row("Color Code", colorCodeCombo, "DMR colour code (0-15). Inherited from this zone's other channels."));
+        form.Children.Add(FormField.Row("Repeater Slot", timeSlotCombo, "DMR timeslot (1 or 2). Inherited from this zone's other channels."));
+        form.Children.Add(FormField.Row("Tx Power", powerCombo, "Transmit power level. Inherited from this zone's other channels."));
 
         var scrollViewer = new ScrollViewer
         {
@@ -119,7 +134,7 @@ public static class NewChannelDialog
         if (!double.TryParse(rxMhzBox.Text, out var finalRxMhz) || !double.TryParse(txMhzBox.Text, out var finalTxMhz))
             return false;
 
-        var contactId = talkGroupPicker.GetOrCreateId(db);
+        var contactId = contactPicker.GetOrCreateId(db);
         var name = string.IsNullOrWhiteSpace(nameBox.Text) ? "New Channel" : nameBox.Text.Trim();
 
         using var tx = db.BeginTransaction();
@@ -144,10 +159,10 @@ public static class NewChannelDialog
             insertCmd.Parameters.Add(new SqliteParameter("$rxHz", (long)Math.Round(finalRxMhz * 1_000_000)));
             insertCmd.Parameters.Add(new SqliteParameter("$txHz", (long)Math.Round(finalTxMhz * 1_000_000)));
             insertCmd.Parameters.Add(new SqliteParameter("$bandwidth", (object?)NullIfEmpty(bandwidth) ?? DBNull.Value));
-            insertCmd.Parameters.Add(new SqliteParameter("$power", (object?)NullIfEmpty(powerBox.Text) ?? DBNull.Value));
+            insertCmd.Parameters.Add(new SqliteParameter("$power", (object?)(powerCombo.SelectedItem as string) ?? DBNull.Value));
             insertCmd.Parameters.Add(new SqliteParameter("$admit", (object?)NullIfEmpty(admitCriteria) ?? DBNull.Value));
-            insertCmd.Parameters.Add(new SqliteParameter("$colorCode", ParseIntOrNull(colorCodeBox.Text) ?? colorCode));
-            insertCmd.Parameters.Add(new SqliteParameter("$timeSlot", ParseIntOrNull(timeSlotBox.Text) ?? timeSlot));
+            insertCmd.Parameters.Add(new SqliteParameter("$colorCode", ParseIntOrNull(colorCodeCombo.SelectedItem as string) ?? colorCode));
+            insertCmd.Parameters.Add(new SqliteParameter("$timeSlot", ParseIntOrNull(timeSlotCombo.SelectedItem as string) ?? timeSlot));
             insertCmd.Parameters.Add(new SqliteParameter("$contactId", (object?)contactId ?? DBNull.Value));
             insertCmd.Parameters.Add(new SqliteParameter("$radioIdId", (object?)radioIdId ?? DBNull.Value));
             insertCmd.Parameters.Add(new SqliteParameter("$scanListId", (object?)scanListId ?? DBNull.Value));
@@ -178,15 +193,19 @@ public static class NewChannelDialog
 
     private static string SuggestChannelName(string zoneName, string talkGroupDisplay)
     {
-        // Strip a leading "TG12345 " prefix, then squeeze what's left into a short suffix - a
-        // starting point the user can edit, not an attempt to reproduce this codeplug's existing
-        // hand-chosen abbreviations (e.g. "SOARC", "UK") exactly.
+        // Strip a leading "TG12345 " prefix and/or trailing " (TG12345)"/" [Network]" tags (added
+        // to the picker's display text so the DMR ID and network are always visible - see
+        // TalkGroupPicker), then squeeze what's left into a short suffix - a starting point the
+        // user can edit, not an attempt to reproduce this codeplug's existing hand-chosen
+        // abbreviations (e.g. "SOARC", "UK") exactly.
         var text = System.Text.RegularExpressions.Regex.Replace(talkGroupDisplay, @"^TG\d+\s*", "");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s*\[[^\]]+\]$", "");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s*\(TG\d+\)$", "");
         var suffix = text.Replace(" ", "");
         var name = $"{zoneName}-{suffix}";
         return name.Length > 16 ? name[..16] : name;
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static int? ParseIntOrNull(string value) => int.TryParse(value, out var v) ? v : null;
+    private static int? ParseIntOrNull(string? value) => int.TryParse(value, out var v) ? v : null;
 }

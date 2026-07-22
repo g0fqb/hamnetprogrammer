@@ -56,10 +56,19 @@ public static class ScanListSettingsDialog
         var priority1Picker = ChannelButtonPicker.Build(xamlRoot, allChannels, priority1Id, "Priority Channel 1");
         var priority2Picker = ChannelButtonPicker.Build(xamlRoot, allChannels, priority2Id, "Priority Channel 2");
 
-        var lookBackABox = new TextBox { Text = lookBackA.ToString("F1") };
-        var lookBackBBox = new TextBox { Text = lookBackB.ToString("F1") };
-        var dropoutBox = new TextBox { Text = dropout.ToString("F1") };
-        var dwellBox = new TextBox { Text = dwell.ToString("F1") };
+        // NumberBox, not free text - all four are hardware-confirmed 0.1-5.0s (see
+        // ScanListRecordCodec's remarks); SmallChange=0.1 matches the radio's own step, and typing
+        // out of range gets visibly clamped as you leave the field instead of silently rewritten
+        // to something else at save time with no feedback.
+        NumberBox TimingBox(double value) => new()
+        {
+            Value = value, Minimum = 0.1, Maximum = 5.0, SmallChange = 0.1,
+            SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 120,
+        };
+        var lookBackABox = TimingBox(lookBackA);
+        var lookBackBBox = TimingBox(lookBackB);
+        var dropoutBox = TimingBox(dropout);
+        var dwellBox = TimingBox(dwell);
 
         var revertCombo = new ComboBox
         {
@@ -115,10 +124,10 @@ public static class ScanListSettingsDialog
             """;
         updateCmd.Parameters.Add(new SqliteParameter("$p1", (object?)priority1Picker.GetSelectedId() ?? DBNull.Value));
         updateCmd.Parameters.Add(new SqliteParameter("$p2", (object?)priority2Picker.GetSelectedId() ?? DBNull.Value));
-        updateCmd.Parameters.Add(new SqliteParameter("$lba", ParseClamped(lookBackABox.Text, 0.5)));
-        updateCmd.Parameters.Add(new SqliteParameter("$lbb", ParseClamped(lookBackBBox.Text, 0.5)));
-        updateCmd.Parameters.Add(new SqliteParameter("$dropout", ParseClamped(dropoutBox.Text, 0.1)));
-        updateCmd.Parameters.Add(new SqliteParameter("$dwell", ParseClamped(dwellBox.Text, 0.1)));
+        updateCmd.Parameters.Add(new SqliteParameter("$lba", NumberBoxValueOrDefault(lookBackABox, 0.5)));
+        updateCmd.Parameters.Add(new SqliteParameter("$lbb", NumberBoxValueOrDefault(lookBackBBox, 0.5)));
+        updateCmd.Parameters.Add(new SqliteParameter("$dropout", NumberBoxValueOrDefault(dropoutBox, 0.1)));
+        updateCmd.Parameters.Add(new SqliteParameter("$dwell", NumberBoxValueOrDefault(dwellBox, 0.1)));
         updateCmd.Parameters.Add(new SqliteParameter("$revert", ((RevertOption)revertCombo.SelectedItem).Mode.ToString()));
         updateCmd.Parameters.Add(new SqliteParameter("$id", scanListId));
         updateCmd.ExecuteNonQuery();
@@ -126,6 +135,6 @@ public static class ScanListSettingsDialog
         return true;
     }
 
-    private static double ParseClamped(string text, double fallback) =>
-        double.TryParse(text, out var value) ? Math.Clamp(value, 0.1, 5.0) : fallback;
+    private static double NumberBoxValueOrDefault(NumberBox box, double fallback) =>
+        double.IsNaN(box.Value) ? fallback : box.Value;
 }

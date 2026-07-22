@@ -2,7 +2,7 @@ using System.Net.Http;
 
 namespace HamNetProgrammer.Core.Online;
 
-public sealed record RadioIdLookupResult(uint DmrId, string Callsign, string Name, string Country);
+public sealed record RadioIdLookupResult(uint DmrId, string Callsign, string Name, string Country, string City = "", string State = "");
 
 /// <summary>
 /// Looks up a callsign's real DMR ID against radioid.net's public database
@@ -49,5 +49,36 @@ public static class RadioIdLookup
             return new RadioIdLookupResult(dmrId, fields[1].Trim(), name, fields[6].Trim());
         }
         return null;
+    }
+
+    /// <summary>Streams every row of the cached CSV - for the bulk Callsign Database sync (see
+    /// CallsignDbEncoder), which is the one legitimate use for the whole ~309k-row dataset at once.
+    /// Every other feature in this app (the Radio IDs page, the channel picker's Private Call
+    /// search) deliberately searches on demand against the shared backend instead - see
+    /// RadioIdNetworkSearch's remarks - so this bulk path exists only for this one purpose.
+    /// Deduped by DmrId (first occurrence wins), sorted ascending by DmrId as the Callsign Database
+    /// format requires.</summary>
+    public static List<RadioIdLookupResult> ReadAll(string csvPath)
+    {
+        var seen = new HashSet<uint>();
+        var results = new List<RadioIdLookupResult>();
+
+        using var reader = new StreamReader(csvPath);
+        reader.ReadLine(); // header: RADIO_ID,CALLSIGN,FIRST_NAME,LAST_NAME,CITY,STATE,COUNTRY
+
+        while (reader.ReadLine() is { } line)
+        {
+            var fields = line.Split(',');
+            if (fields.Length < 7) continue;
+            if (!uint.TryParse(fields[0].Trim(), out var dmrId)) continue;
+            var callsign = fields[1].Trim();
+            if (callsign.Length == 0 || !seen.Add(dmrId)) continue;
+
+            var name = $"{fields[2].Trim()} {fields[3].Trim()}".Trim();
+            results.Add(new RadioIdLookupResult(dmrId, callsign, name, fields[6].Trim(), fields[4].Trim(), fields[5].Trim()));
+        }
+
+        results.Sort((a, b) => a.DmrId.CompareTo(b.DmrId));
+        return results;
     }
 }

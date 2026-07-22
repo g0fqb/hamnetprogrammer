@@ -12,21 +12,29 @@ public static class AnyToneD878MemoryDumper
 {
     private const int MaxChunkLength = 0xFF;
 
+    /// <param name="onRegionStarted">(region, index, total, bytesDoneSoFar, totalBytes) - called
+    /// once per region, after it finishes. Report progress by BYTES, not just region index/total:
+    /// the "six-block supercluster" raw-fill regions added 2026-07-22 are large (up to ~260,000
+    /// bytes each) and sit at the end of the region list, so a region-COUNT-based progress bar
+    /// crawls through the last few percent for a disproportionate amount of real time - confirmed
+    /// directly, this looked like a hang on real hardware even though it was still progressing
+    /// normally.</param>
     public static IReadOnlyList<RegionDumpResult> Dump(
         AnyToneD878Transport radio,
         string binaryOutputPath,
         string manifestOutputPath,
-        Action<MemoryRegion, int, int>? onRegionStarted = null)
+        Action<MemoryRegion, int, int, long, long>? onRegionStarted = null)
     {
         var regions = AnyToneD878MemoryMap.GetBaselineRegions();
         var results = new List<RegionDumpResult>(regions.Count);
+        var totalBytes = regions.Sum(r => (long)r.Length);
+        var bytesDone = 0L;
 
         using var output = new FileStream(binaryOutputPath, FileMode.Create, FileAccess.Write);
 
         for (var i = 0; i < regions.Count; i++)
         {
             var region = regions[i];
-            onRegionStarted?.Invoke(region, i + 1, regions.Count);
             var fileOffset = output.Position;
 
             try
@@ -51,6 +59,9 @@ public static class AnyToneD878MemoryDumper
                 output.SetLength(Math.Max(output.Length, output.Position));
                 results.Add(new RegionDumpResult(region, fileOffset, false, ex.Message));
             }
+
+            bytesDone += region.Length;
+            onRegionStarted?.Invoke(region, i + 1, regions.Count, bytesDone, totalBytes);
         }
 
         WriteManifest(manifestOutputPath, results);

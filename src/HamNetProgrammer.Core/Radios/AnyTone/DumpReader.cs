@@ -6,7 +6,7 @@ namespace HamNetProgrammer.Core.Radios.AnyTone;
 public sealed class DumpReader
 {
     private readonly byte[] _data;
-    private readonly Dictionary<string, (long FileOffset, int Length)> _regions = new();
+    private readonly Dictionary<string, (uint Address, long FileOffset, int Length, bool Succeeded)> _regions = new();
 
     private DumpReader(byte[] data) => _data = data;
 
@@ -19,18 +19,29 @@ public sealed class DumpReader
             var fields = lines[i].Split(',');
             if (fields.Length < 5) continue;
             var name = fields[0];
+            var address = Convert.ToUInt32(fields[1], 16);
             var length = int.Parse(fields[2], CultureInfo.InvariantCulture);
             var fileOffset = long.Parse(fields[3], CultureInfo.InvariantCulture);
-            reader._regions[name] = (fileOffset, length);
+            var succeeded = fields.Length > 4 && bool.TryParse(fields[4], out var s) && s;
+            reader._regions[name] = (address, fileOffset, length, succeeded);
         }
         return reader;
     }
 
     public bool HasRegion(string name) => _regions.ContainsKey(name);
 
+    /// <summary>False for a region whose read failed when this dump was taken (padded with zeros,
+    /// not real data) - callers comparing two dumps should skip these rather than treat padding as
+    /// a genuine mismatch or, worse, a genuine match.</summary>
+    public bool RegionSucceeded(string name) => _regions.TryGetValue(name, out var r) && r.Succeeded;
+
+    public IReadOnlyCollection<string> RegionNames => _regions.Keys;
+
+    public uint GetRegionAddress(string name) => _regions[name].Address;
+
     public ReadOnlySpan<byte> GetRegion(string name)
     {
-        var (offset, length) = _regions[name];
+        var (_, offset, length, _) = _regions[name];
         return _data.AsSpan((int)offset, length);
     }
 
@@ -39,25 +50,25 @@ public sealed class DumpReader
     {
         var bank = flatIndex0Based / 128;
         var slot = flatIndex0Based % 128;
-        var (offset, _) = _regions[$"Channels[{bank}]"];
+        var (_, offset, _, _) = _regions[$"ChannelBank[{bank}]"];
         return _data.AsSpan((int)offset + (int)slot * 64, 64);
     }
 
     public ReadOnlySpan<byte> GetTalkGroupRecord(int index0Based)
     {
-        var (offset, _) = _regions["TalkGroupList"];
+        var (_, offset, _, _) = _regions["TalkGroupList"];
         return _data.AsSpan((int)offset + index0Based * 100, 100);
     }
 
     public ReadOnlySpan<byte> GetRadioIdRecord(int index0Based)
     {
-        var (offset, _) = _regions["RadioIdList"];
+        var (_, offset, _, _) = _regions["RadioIdList"];
         return _data.AsSpan((int)offset + index0Based * 32, 32);
     }
 
     public ReadOnlySpan<byte> GetZoneRecord(int index0Based)
     {
-        var (offset, _) = _regions["Zones"];
+        var (_, offset, _, _) = _regions["Zones"];
         return _data.AsSpan((int)offset + index0Based * 512, 512);
     }
 }

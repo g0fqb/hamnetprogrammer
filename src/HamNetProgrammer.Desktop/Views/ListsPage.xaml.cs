@@ -73,22 +73,23 @@ public sealed partial class ListsPage : Page
 
         FormPanel.Children.Add(FormField.SectionHeader("Scan Lists"));
         FormPanel.Children.Add(FormField.Row("Enabled", _scanListsEnabledBox!,
-            "If off, no Scan List data (or its per-slot channel references) reaches the radio on the next write, regardless of what's configured here - whatever the radio already has for Scan Lists is left untouched."));
+            "Applied automatically every time you click Write Codeplug to Radio - not a separate action. If off, no Scan List data (or its per-slot channel references) reaches the radio on that write, regardless of what's configured here - whatever the radio already has for Scan Lists is left untouched."));
 
         FormPanel.Children.Add(FormField.SectionHeader("Group Lists"));
         FormPanel.Children.Add(FormField.Row("Enabled", _groupListsEnabledBox!,
-            "If off, no Group List data (or its per-channel references) reaches the radio on the next write - whatever the radio already has for Group Lists is left untouched."));
+            "Applied automatically every time you click Write Codeplug to Radio - not a separate action. If off, no Group List data (or its per-channel references) reaches the radio on that write - whatever the radio already has for Group Lists is left untouched."));
 
         FormPanel.Children.Add(FormField.SectionHeader("Roaming Zones"));
         FormPanel.Children.Add(FormField.Row("Enabled", _roamingEnabledBox!,
-            "If off, no Roaming Zone/Channel data reaches the radio on the next write - whatever the radio already has for roaming is left untouched. Turn this off if you don't use roaming between hotspots."));
+            "Applied automatically every time you click Write Codeplug to Radio - not a separate action. If off, no Roaming Zone/Channel data reaches the radio on that write - whatever the radio already has for roaming is left untouched. Turn this off if you don't use roaming between hotspots."));
 
         FormPanel.Children.Add(FormField.SectionHeader("Automation"));
         FormPanel.Children.Add(FormField.Row("Sync Lists", _syncListsWithZonesBox!,
-            "Before every Write Codeplug (for whichever of the above are enabled), regenerate each " +
-            "zone's Scan List/Group List membership and talkgroup Roaming Zones from the zones' " +
-            "current channels. Turn off if you've manually customized list membership and don't " +
-            "want it overwritten."));
+            "Applied automatically every time you click Write Codeplug to Radio, before the write " +
+            "itself (for whichever of the above are enabled): regenerates each zone's Scan " +
+            "List/Group List membership and talkgroup Roaming Zones from the zones' current " +
+            "channels, however those channels were added or created. Turn off if you've manually " +
+            "customized list membership and don't want it overwritten."));
     }
 
     private void OnSaveClicked(object sender, RoutedEventArgs e)

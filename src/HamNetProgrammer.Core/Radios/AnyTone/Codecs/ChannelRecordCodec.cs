@@ -21,7 +21,14 @@ public sealed record ChannelRecord(
     byte? GroupListIndex, // 0-based index into GroupLists; null = none (0xFF)
     string Name,
     double? CtcssEncodeHz = null,
-    double? CtcssDecodeHz = null);
+    double? CtcssDecodeHz = null,
+    // "DMO Simplex" DMR mode (AnyTone CPS: Channel -> Digital -> DMR Mode). REQUIRED for simplex
+    // MMDVM hotspots: a full dump-diff against a working RT Systems codeplug (2026-07-21) showed RT
+    // sets this bit on every hotspot channel (all 7 hotspot zones = DMO Simplex) and clears it for
+    // duplex repeaters, while this project never set it - which was THE reason MMDVM hotspots never
+    // decoded HamNetProgrammer-written channels (radio keys up, hotspot logs zero RF, all channels,
+    // both hotspots). Sourced from the "DMR Mode" value in the imported RT Systems data.
+    bool ThroughMode = false);
 
 public static class ChannelRecordCodec
 {
@@ -47,8 +54,17 @@ public static class ChannelRecordCodec
 
         bytes[10] = CtcssTones.IndexForTone(ch.CtcssEncodeHz);
         bytes[11] = CtcssTones.IndexForTone(ch.CtcssDecodeHz);
-        // 12-15 DCS encode/decode: not modeled, left off (0x00 00 00 00)
-        // 16-17 Custom CTCSS, 18-19 reserved: left 0
+        // bytes 12-17: previously left zero (assumed DCS encode/decode + Custom CTCSS, "not
+        // modeled"). A dump-diff against a working RT Systems codeplug (2026-07-21) showed RT writes
+        // a FIXED template `11 00 11 00 cf 09` here on EVERY digital channel (all 147, identical) -
+        // not per-channel analog config, so these are really a digital-mode setting the codec
+        // mislabeled. Matched to RT's working template for digital channels as part of chasing the
+        // MMDVM-hotspot-decode issue. Analog channels keep the zeroed (no DCS/custom-CTCSS) default.
+        if (ch.IsDigital)
+        {
+            bytes[12] = 0x11; bytes[13] = 0x00; bytes[14] = 0x11; bytes[15] = 0x00;
+            bytes[16] = 0xcf; bytes[17] = 0x09;
+        }
 
         WriteUInt32LE(bytes, 20, ch.ContactIndex);
         bytes[24] = ch.RadioIdIndex;
@@ -67,12 +83,23 @@ public static class ChannelRecordCodec
         AsciiFieldCodec.Encode(ch.Name, 16).CopyTo(bytes, 35);
 
         bytes[51] = 0; // EX: not excluded from roaming
-        bytes[52] = 0; // AR
+        // byte 52 (0x34): bit 1 = "through mode" / DMO Simplex (qdmr AnytoneDMRChannelExtension.
+        // throughMode). Set for simplex hotspot channels - see ChannelRecord.ThroughMode's remarks.
+        bytes[52] = (byte)(ch.ThroughMode ? 0b10 : 0);
         bytes[53] = 0; // AP
         bytes[54] = 0; // DP
         bytes[55] = 0; // DR
         bytes[56] = 0; // CO: no frequency correction
-        bytes[57] = 0xFF; // EN: digital encryption off
+        // byte 57 (0x39): MUST be 0x00, not 0xFF. This was previously set to 0xFF believing it
+        // meant "digital encryption off" - but a full dump-diff against a known-working RT Systems
+        // codeplug (2026-07-21) found RT writes 0x00 here on ALL 580 channels, while this codec
+        // wrote 0xFF on all 573. That single uniform difference was the root cause of the entire
+        // "MMDVM never hears HamNetProgrammer" saga: every channel transmitted something MMDVM
+        // couldn't decode (radio keys up, hotspot logs zero RF activity, all channels, both
+        // hotspots). qdmr doesn't document this byte for the channel element, so its exact meaning
+        // is unknown, but matching the working reference (0x00 universally) is the fix - confirmed
+        // on real hardware. Do NOT set this back to 0xFF.
+        bytes[57] = 0x00;
         bytes[58] = 0; // KK
 
         return bytes;

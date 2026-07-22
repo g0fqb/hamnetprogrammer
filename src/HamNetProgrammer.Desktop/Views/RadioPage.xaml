@@ -55,7 +55,7 @@
                             <StackPanel Spacing="8">
                                 <TextBlock Text="Write codeplug to radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                                 <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Encodes the current SQLite codeplug and writes every region to the radio in one programming session. The radio will drop off USB and re-enumerate a few seconds after this completes." />
+                                           Text="Encodes the current SQLite codeplug and writes it to the radio across several programming sessions. The radio will restart itself several times during this - that's expected, not an error - and returns to normal once it finishes." />
                                 <Button x:Name="WriteCodeplugButton" Content="Write Codeplug to Radio" Click="OnWriteCodeplugClicked" Background="#e0924a" Foreground="#10161d" FontWeight="SemiBold" />
                             </StackPanel>
                         </Border>
@@ -73,6 +73,15 @@
                     <StackPanel Grid.Column="1" Spacing="12">
                         <Border Background="#1a232c" CornerRadius="6" Padding="14">
                             <StackPanel Spacing="8">
+                                <TextBlock Text="Sync reference data" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                           Text="Writes your talkgroup list and the full radioid.net individual-callsign database (for caller ID on people you haven't added yourself) to the radio. This is separate from Write Codeplug because it rarely changes and takes far longer to upload - run it every few weeks, not after every small edit." />
+                                <Button x:Name="SyncReferenceDataButton" Content="Sync Reference Data" Click="OnSyncReferenceDataClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                            <StackPanel Spacing="8">
                                 <TextBlock Text="Contribute a memory-map sample" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                                 <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
                                            Text="Read-only - never writes anything to the radio. Helps extend support to other AnyTone-family models we don't own by capturing what's actually at each known memory address. Most useful if your radio isn't a D878UV." />
@@ -84,7 +93,7 @@
                             <StackPanel Spacing="8">
                                 <TextBlock Text="Restore previous codeplug" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                                 <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Available right after a Write Codeplug run that actually reached the radio. Writes back exactly what that write overwrote, from the automatic backup taken just before it - a way to back out if something looks wrong." />
+                                           Text="Pick from any past Write Codeplug run and write back exactly what it overwrote, from the automatic backup taken just before it - a way to back out if something looks wrong, even days later. If that write never actually reached the radio, this instead takes a fresh dump and proves the radio still matches the pre-write backup, rather than just assuming it." />
                                 <Button x:Name="RestoreButton" Content="Restore Previous Codeplug" Click="OnRestoreClicked" IsEnabled="False" />
                             </StackPanel>
                         </Border>
@@ -93,7 +102,7 @@
                             <StackPanel Spacing="8">
                                 <TextBlock Text="Diagnostic report" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
                                 <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Every Write Codeplug run automatically saves a before/after memory backup and a log of every region written. If something looks wrong, send that report so it can be investigated - no need to attach anything yourself." />
+                                           Text="Every Write Codeplug or Restore run automatically saves a before/after memory backup and a log of every region written. If something looks wrong - including a failure message that points here - send that report so it can be investigated, no need to attach anything yourself or dig through the log panel." />
                                 <Button x:Name="SendReportButton" Content="Send Diagnostic Report" Click="OnSendReportClicked" IsEnabled="False" />
                             </StackPanel>
                         </Border>
@@ -109,21 +118,39 @@
         </Grid>
 
         <Border Grid.Row="2" Background="#1a232c" CornerRadius="6" Margin="0,10,0,0" Padding="14,10">
-            <Grid ColumnSpacing="20">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+            <Grid RowSpacing="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Ellipse x:Name="ConnectionDot" Width="9" Height="9" Fill="#5a6570" />
-                    <TextBlock x:Name="ConnectionStatusText" FontSize="12" Foreground="#dce6ea" Text="Not connected." />
-                </StackPanel>
+                <!-- Only shown during Write Codeplug (see OnWriteCodeplugClicked) - a full write
+                     legitimately drops the radio off USB and re-enumerates it several times in a
+                     row (once per isolated shared-block/channel-bank session, proven necessary on
+                     real hardware - see AnyToneD878CodeplugWriter's remarks), which looks alarming
+                     to someone who doesn't know that's expected. -->
+                <Border x:Name="RebootNoticeBanner" Grid.Row="0" Visibility="Collapsed"
+                        Background="#332a16" BorderBrush="#e0924a" BorderThickness="1" CornerRadius="4" Padding="10,7">
+                    <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="#e0c48a"
+                               Text="The radio will restart itself several times during this write - each one is expected, not an error. Please leave it connected and powered on until this finishes." />
+                </Border>
 
-                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                    <ProgressBar x:Name="OperationProgressBar" Minimum="0" Maximum="1" Value="0" />
-                    <TextBlock x:Name="OperationStatusText" FontSize="12" Foreground="#8896a0" />
-                </StackPanel>
+                <Grid Grid.Row="1" ColumnSpacing="20">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Ellipse x:Name="ConnectionDot" Width="9" Height="9" Fill="#5a6570" />
+                        <TextBlock x:Name="ConnectionStatusText" FontSize="12" Foreground="#dce6ea" Text="Not connected." />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                        <ProgressBar x:Name="OperationProgressBar" Minimum="0" Maximum="1" Value="0" />
+                        <TextBlock x:Name="OperationStatusText" FontSize="12" Foreground="#8896a0" />
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Border>
     </Grid>

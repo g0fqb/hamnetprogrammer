@@ -41,6 +41,32 @@ public static class FormField
         return grid;
     }
 
+    /// <summary>Closed-choice ComboBox for a field with a small, fixed valid set (e.g. Tx Power,
+    /// Colour Code) - a free-text TextBox for these let users type anything, including garbage the
+    /// encoder can't do anything sensible with (confirmed: an unrecognized Power value silently
+    /// becomes "High" with no warning). Falls back to the first option if the stored value doesn't
+    /// match anything in the list (e.g. stale/legacy imported data) rather than throwing - visible
+    /// to the user as "did this reset?" instead of a crash.</summary>
+    public static ComboBox ClosedCombo(IReadOnlyList<string> options, string? currentValue)
+    {
+        var combo = new ComboBox { ItemsSource = options, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var match = options.FirstOrDefault(o => string.Equals(o, currentValue, StringComparison.OrdinalIgnoreCase));
+        combo.SelectedItem = match ?? options.FirstOrDefault();
+        return combo;
+    }
+
+    /// <summary>Same idea but editable - a curated list of common values (e.g. standard CTCSS
+    /// tones) offered as choices, while still allowing a genuinely custom value to be typed (some
+    /// fields have a real "Custom" concept beyond their standard table). Read back via .Text, not
+    /// .SelectedItem, since IsEditable lets the box hold text that isn't in ItemsSource at all.</summary>
+    public static ComboBox EditableCombo(IReadOnlyList<string> options, string? currentValue) => new()
+    {
+        ItemsSource = options,
+        IsEditable = true,
+        Text = currentValue ?? "",
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+    };
+
     public static TextBlock SectionHeader(string text) => new()
     {
         Text = text,

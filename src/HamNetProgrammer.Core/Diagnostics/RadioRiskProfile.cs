@@ -37,16 +37,15 @@ public static class RadioRiskCatalog
         if (id.Contains("878"))
             return new RadioRiskProfile("AnyTone AT-D878UV", RadioRiskTier.Validated,
                 "This tool's memory map and flash erase-block layout for the D878UV are confirmed " +
-                "against real hardware, including a prior write that corrupted shared settings - the " +
-                "root cause of that incident has since been fixed at the code level (read-modify-write " +
-                "around every known shared erase block). Not risk-free, but the known failure mode is closed.");
+                "against real hardware. Writing to flash memory always carries some risk, but a full " +
+                "backup is taken automatically before every write, and Restore Previous Codeplug can " +
+                "undo it afterwards if anything looks wrong.");
 
         if (id.Contains("868"))
             return new RadioRiskProfile("AnyTone AT-D868UV / D868UVE", RadioRiskTier.Moderate,
                 "Same protocol family as the D878UV (its direct predecessor) with likely-similar record " +
                 "layout, but this model's flash erase-block boundaries have not been independently " +
-                "confirmed on real hardware - the exact thing that caused a real corruption incident on " +
-                "the D878UV. Back up the radio's current codeplug before writing.");
+                "confirmed on real hardware. Back up the radio's current codeplug before writing.");
 
         if (id.Contains("578"))
             return new RadioRiskProfile("AnyTone AT-D578UV", RadioRiskTier.Moderate,

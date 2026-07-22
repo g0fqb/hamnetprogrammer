@@ -1,4 +1,7 @@
 using Microsoft.UI.Xaml;
+using HamNetProgrammer.Core.Data;
+using HamNetProgrammer.Core.Online;
+using HamNetProgrammer.Desktop.Utils;
 
 namespace HamNetProgrammer.Desktop;
 
@@ -75,16 +78,38 @@ public partial class App : Application
     }
 
     // No login/session to restore - this is a fully local, offline tool. Splash shows for a
-    // minimum of 2.5s (much shorter than PacketCluster's 9s - there's no network round trip to
-    // hide here, just enough to avoid an instant flash on a fast machine).
+    // minimum of 2.5s, during which the talkgroup list refreshes from the shared backend (see
+    // RefreshTalkgroupsAsync) - started here rather than awaited, so a slow/absent connection
+    // delays nothing; it just finishes in the background after the main window is already up.
     private static async Task FinishStartupAsync(SplashWindow splash, AppShell shell)
     {
-        await Task.Delay(2500);
+        var minDelay = Task.Delay(2500);
+        _ = RefreshTalkgroupsAsync();
+        await minDelay;
 
         MainWindow = shell;
         shell.Activate();
         shell.ShowMain();
         Log("AppShell activated");
         splash.Close();
+    }
+
+    // Talkgroups (Brandmeister/TGIF/FreeDMR via the shared backend) used to need a manual "Import
+    // Talkgroups" button - confusing, since it looked like it should prompt for a CSV rather than
+    // just pulling from Railway. Refreshing automatically on every launch removes that button
+    // entirely; individual DMR IDs (radioid.net, ~309k rows) are deliberately NOT synced this way -
+    // that dataset stays search-only server-side, see RadioIdNetworkSearch's remarks.
+    private static async Task RefreshTalkgroupsAsync()
+    {
+        try
+        {
+            using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+            var result = await TalkGroupNetworkImporter.ImportAsync(db);
+            Log($"Startup talkgroup refresh: {result.Added} added, {result.Updated} updated, {result.Unchanged} unchanged, {result.Warnings.Count} warnings.");
+        }
+        catch (Exception ex)
+        {
+            Log($"Startup talkgroup refresh failed (non-fatal, using existing local data): {ex.Message}");
+        }
     }
 }

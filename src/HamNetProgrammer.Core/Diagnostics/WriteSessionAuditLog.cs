@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 
 namespace HamNetProgrammer.Core.Diagnostics;
@@ -68,7 +69,18 @@ public sealed class WriteSessionAuditLog : IDisposable
 
     /// <summary>Reads back every "region" event logged by <see cref="LogRegion"/> in a session -
     /// the exact set of regions a write actually touched, used to scope a restore to undoing that
-    /// one session rather than guessing from the current (possibly since-changed) database state.</summary>
+    /// one session rather than guessing from the current (possibly since-changed) database state.
+    ///
+    /// Matches any status starting with "written" (plain "written" from the bundled-session path,
+    /// "written and verified" from WriteRegionChunkedAndVerify callers like ChannelBank[]/
+    /// TalkGroupList[] banks, "written and verified (attempt N)" from WriteAndVerifySharedBlock) -
+    /// an exact "written" match here previously meant EVERY shared-block write (RoamingBlock/
+    /// GeneralUsedBitmapsBlock/ZoneChannelDefaults, which have always logged the "(attempt N)"
+    /// form) was silently invisible to this method, so Restore Previous Codeplug's
+    /// HasRoamingBlock/HasGeneralUsedBitmapsBlock/HasZoneChannelDefaults checks could never
+    /// evaluate true and the shared-block restore path never actually ran - found and fixed
+    /// 2026-07-22 while auditing restore coverage after the ChannelBank[] rename hit the same
+    /// class of bug.</summary>
     public static IReadOnlyList<(string Name, uint Address, int Length)> ReadWrittenRegions(string logPath)
     {
         var results = new List<(string, uint, int)>();
@@ -78,7 +90,8 @@ public sealed class WriteSessionAuditLog : IDisposable
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
             if (!root.TryGetProperty("evt", out var evt) || evt.GetString() != "region") continue;
-            if (!root.TryGetProperty("status", out var status) || status.GetString() != "written") continue;
+            if (!root.TryGetProperty("status", out var status) ||
+                !(status.GetString() ?? "").StartsWith("written", StringComparison.Ordinal)) continue;
 
             var name = root.GetProperty("name").GetString()!;
             var address = Convert.ToUInt32(root.GetProperty("address").GetString(), 16);

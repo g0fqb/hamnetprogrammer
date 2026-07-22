@@ -200,6 +200,14 @@ public static class CodeplugDatabase
         ("ScanListsEnabled", "INTEGER NOT NULL DEFAULT 1"),
         ("GroupListsEnabled", "INTEGER NOT NULL DEFAULT 1"),
         ("RoamingEnabled", "INTEGER NOT NULL DEFAULT 1"),
+        // Fingerprint (count, max Id) of the eligible Contacts as of the last "Sync Reference Data"
+        // run - see AnyToneD878CodeplugEncoder.GetContactIndexFingerprint. Routine Write Codeplug no
+        // longer writes the talkgroup list every time (it's large and changes rarely), so if either
+        // value has since changed, some channel's ContactIndex may no longer match what's actually
+        // on the radio - this is how that gets detected and warned about before writing, instead of
+        // silently repeating the old TG1-fallback bug.
+        ("LastSyncedContactCount", "INTEGER NOT NULL DEFAULT 0"),
+        ("LastSyncedMaxContactId", "INTEGER NOT NULL DEFAULT 0"),
     ];
 
     private static readonly (string Column, string Definition)[] ContactsMigrationColumns =
@@ -220,7 +228,32 @@ public static class CodeplugDatabase
         MigrateColumns(connection, "Zones", ZoneMigrationColumns);
         MigrateColumns(connection, "RadioSettings", RadioSettingsMigrationColumns);
         MigrateColumns(connection, "Contacts", ContactsMigrationColumns);
+        SeedContactSyncFingerprintIfUnset(connection);
         return connection;
+    }
+
+    // Routine writes always included the talkgroup list before "Sync Reference Data" existed, so
+    // an existing database upgrading to this version has (in practice) already had its current
+    // contacts on the radio as of its last write - seeding to the live fingerprint here avoids a
+    // false "not synced" warning on the very next write, rather than defaulting to (0, 0) and
+    // treating every pre-existing install as never having synced anything. Idempotent: only fires
+    // while both columns are still at their just-migrated default.
+    private static void SeedContactSyncFingerprintIfUnset(SqliteConnection connection)
+    {
+        using var checkCmd = connection.CreateCommand();
+        checkCmd.CommandText = "SELECT LastSyncedContactCount, LastSyncedMaxContactId FROM RadioSettings WHERE Id = 1;";
+        using var reader = checkCmd.ExecuteReader();
+        if (!reader.Read() || reader.GetInt64(0) != 0 || reader.GetInt64(1) != 0) return;
+        reader.Close();
+
+        var (count, maxId) = Radios.AnyTone.AnyToneD878CodeplugEncoder.GetContactIndexFingerprint(connection);
+        if (count == 0 && maxId == 0) return;
+
+        using var updateCmd = connection.CreateCommand();
+        updateCmd.CommandText = "UPDATE RadioSettings SET LastSyncedContactCount = $count, LastSyncedMaxContactId = $maxId WHERE Id = 1;";
+        updateCmd.Parameters.AddWithValue("$count", count);
+        updateCmd.Parameters.AddWithValue("$maxId", maxId);
+        updateCmd.ExecuteNonQuery();
     }
 
     // CREATE TABLE IF NOT EXISTS won't add new columns to a table that already exists (like the

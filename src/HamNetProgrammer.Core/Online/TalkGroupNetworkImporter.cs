@@ -7,19 +7,35 @@ namespace HamNetProgrammer.Core.Online;
 
 public sealed record TalkGroupImportResult(int Added, int Updated, int Unchanged, IReadOnlyList<string> Warnings);
 
+/// <summary>One network's name for a DmrId, as published by the shared backend - public so
+/// read-only consumers (e.g. TalkGroupAuditor) can compare against it without triggering an
+/// actual import/write.</summary>
+public sealed record NetworkTalkGroup(long DmrId, string Name, string Network);
+
 /// <summary>
 /// Imports the DMR talkgroup list from HamNetProgrammer's shared backend (PacketCluster/Ham Net
-/// Global on Railway), which itself merges Brandmeister, TGIF, and FreeDMR into one list deduped
-/// by DmrId - see the backend's internal/talkgroups package. Every install reads the same
-/// reference this way, rather than each client independently importing from and resolving
-/// overlaps between the three networks itself.
+/// Global on Railway), which merges Brandmeister, TGIF, and FreeDMR - see the backend's
+/// internal/talkgroups package. Every install reads the same reference this way, rather than each
+/// client independently importing from and resolving overlaps between the three networks itself.
 ///
-/// Dedup is strictly by DmrId, not (DmrId, Network): the radio's own TalkGroupList addresses a
-/// group call by number alone, with no concept of "network" anywhere in the format (confirmed:
-/// TalkGroupRecordCodec only encodes Name+DmrId), and which network a call actually reaches is
-/// entirely a function of the hotspot's own configuration, outside the codeplug. A DmrId already
-/// present locally (imported before, or manually created) is left untouched rather than
-/// duplicated; Network is recorded purely as "where this contact's data came from" provenance.
+/// The same DmrId can legitimately appear more than once (once per network that has its own name
+/// for it) - the backend no longer collapses these, since the display name is what a user actually
+/// searches by, and picking an arbitrary "winning" network's name for a number forced anyone on a
+/// different network to know that other network's title just to find their own TG. Existing-row
+/// matching here is scoped to (DmrId, Network) accordingly: re-running the import refreshes each
+/// network's own row in place, but a different network's entry for the same number becomes its own
+/// row rather than overwriting it. A manually-created contact (Network NULL) never matches this
+/// lookup at all, so it's never touched by any network's import.
+///
+/// Real-hardware incident, 2026-07-20: switching off the old DmrId-only dedup let all three
+/// networks' rows coexist, which took the on-radio talkgroup list from ~3,000 to 5,721 entries -
+/// enough to freeze the AT-D878UV's own talkgroup browser solid (required a battery pull to
+/// recover), and every contact after the new rows got a different index than before, which is
+/// what a channel's on-radio group-call reference actually is (see AnyToneD878CodeplugEncoder's
+/// BuildContactIndex remarks) - explaining channels resolving to the wrong, unrelated talkgroup
+/// after a sync. <c>networkFilter</c> defaults to the one network actually in use (FreeDMR) until
+/// there's a real per-user network preference (the still-open "network-scoping redesign") - this
+/// is a stopgap that keeps the import from re-exploding on every app launch, not the final design.
 /// </summary>
 public static class TalkGroupNetworkImporter
 {
@@ -34,7 +50,17 @@ public static class TalkGroupNetworkImporter
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("network")] string Network);
 
-    public static async Task<TalkGroupImportResult> ImportAsync(SqliteConnection db, HttpClient? httpClient = null)
+    public static async Task<TalkGroupImportResult> ImportAsync(SqliteConnection db, HttpClient? httpClient = null, string? networkFilter = "FreeDMR")
+    {
+        var fetched = await FetchAsync(httpClient, networkFilter);
+        var entries = fetched.Select(f => new TalkgroupEntry(f.DmrId, f.Name, f.Network)).ToList();
+        return ApplyImport(db, entries);
+    }
+
+    /// <summary>Read-only fetch from the shared backend - no database touched. Public so
+    /// read-only consumers (e.g. a duplicate/mislabeled-talkgroup audit) can compare against the
+    /// same source of truth ImportAsync itself uses, without writing anything.</summary>
+    public static async Task<List<NetworkTalkGroup>> FetchAsync(HttpClient? httpClient = null, string? networkFilter = null)
     {
         var client = httpClient ?? new HttpClient();
         try
@@ -46,7 +72,11 @@ public static class TalkGroupNetworkImporter
             var parsed = JsonSerializer.Deserialize<TalkgroupsResponse>(json)
                 ?? throw new InvalidOperationException("Empty response from talkgroups endpoint.");
 
-            return ApplyImport(db, parsed.Talkgroups);
+            var entries = networkFilter is null
+                ? parsed.Talkgroups
+                : parsed.Talkgroups.Where(t => string.Equals(t.Network, networkFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            return entries.Select(e => new NetworkTalkGroup(e.DmrId, e.Name, e.Network)).ToList();
         }
         finally
         {
@@ -68,26 +98,27 @@ public static class TalkGroupNetworkImporter
 
             long? existingId = null;
             string? existingName = null;
-            string? existingNetwork = null;
+            // Scoped to this entry's own network - a manually-created contact (Network NULL) can
+            // never match, and a different network's row for the same DmrId is a separate entry,
+            // not something this lookup should find or touch.
             using (var findCmd = db.CreateCommand())
             {
                 findCmd.Transaction = transaction;
-                findCmd.CommandText = "SELECT Id, Name, Network FROM Contacts WHERE DmrId = $dmrId AND CallType = 'Group' LIMIT 1;";
+                findCmd.CommandText = "SELECT Id, Name FROM Contacts WHERE DmrId = $dmrId AND CallType = 'Group' AND Network = $network LIMIT 1;";
                 findCmd.Parameters.AddWithValue("$dmrId", entry.DmrId);
+                findCmd.Parameters.AddWithValue("$network", entry.Network);
                 using var reader = findCmd.ExecuteReader();
                 if (reader.Read())
                 {
                     existingId = reader.GetInt64(0);
                     existingName = reader.GetString(1);
-                    existingNetwork = reader.IsDBNull(2) ? null : reader.GetString(2);
                 }
             }
 
             if (existingId is { } id)
             {
-                // A manually-created contact (Network NULL) already claims this number - leave it.
-                // Otherwise this is just re-running the same import; refresh the name if it changed.
-                if (existingNetwork is null || existingName == name)
+                // Just re-running the same import; refresh the name if it changed.
+                if (existingName == name)
                 {
                     unchanged++;
                     continue;
