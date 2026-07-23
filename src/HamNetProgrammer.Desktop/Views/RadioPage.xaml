@@ -20,7 +20,7 @@
              pushed clean off the bottom of a window shorter than the page's natural content. -->
         <Grid Grid.Row="1">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" MaxHeight="400" />
+                <RowDefinition Height="Auto" MaxHeight="620" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 

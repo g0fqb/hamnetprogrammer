@@ -1,3 +1,4 @@
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -36,7 +37,14 @@ public class AppShell : Window
     {
         ActiveInstance = this;
         Title = "HamNetProgrammer";
+        // A fixed 1200x800 could still be taller than a smaller/lower-res screen's usable work
+        // area, cropping the Radio page's cards (especially now there's more content since the
+        // High-Level/Low-Level grouping) below the visible window with no obvious hint that
+        // resizing - or scrolling inside that panel - would reveal the rest. Maximizing instead
+        // adapts to whatever screen is actually available, so there's no fixed size to get wrong.
         this.AppWindow.Resize(new Windows.Graphics.SizeInt32(1200, 800));
+        if (this.AppWindow.Presenter is OverlappedPresenter presenter)
+            presenter.Maximize();
         AppIcon.Apply(this);
 
         _uiQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
