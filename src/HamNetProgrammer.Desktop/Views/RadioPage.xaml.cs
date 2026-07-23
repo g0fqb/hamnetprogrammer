@@ -434,6 +434,30 @@ public sealed partial class RadioPage : Page
         SetConnectionStatus(true, DescribeDevice(deviceId, port));
         SetBusy(false);
 
+        // Hard block, not just a stronger disclaimer - Write is destructive (unlike Read, which
+        // was already gated this way). A Moderate/High/Unknown model's erase-block layout isn't
+        // confirmed, so a bad write here could land exactly like the D878UV lock-screen incident
+        // with no known recovery path. Same wording pattern as Read Codeplug's existing refusal.
+        if (profile.Tier != RadioRiskTier.Validated)
+        {
+            Log($"Write Codeplug refused: {profile.ModelLabel} is {profile.Tier} risk, not hardware-verified.");
+            Log("Releasing the radio from programming mode...");
+            try
+            {
+                await Task.Run(() =>
+                {
+                    radio.EndProgrammingSession();
+                    radio.Close();
+                });
+            }
+            catch (Exception ex)
+            {
+                Log($"Error releasing radio (it may still show 'PC Write' until power-cycled): {ex.Message}");
+            }
+            SetComplete(false, $"{profile.ModelLabel} isn't a hardware-verified model for Write Codeplug - writing to it could corrupt settings in ways this tool doesn't know how to detect or undo, with no guaranteed recovery. Use \"Contribute a Memory Sample\" instead so this model can be properly validated before writing is ever enabled for it.");
+            return;
+        }
+
         if (!await RiskDisclaimerDialog.ShowAsync(this.XamlRoot, profile))
         {
             Log("Write cancelled - releasing the radio from programming mode...");

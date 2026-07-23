@@ -39,7 +39,20 @@ public static class RiskDisclaimerDialog
 
         panel.Children.Add(new TextBlock
         {
-            Text = "A diagnostic session (audit log + memory backup) will be saved automatically for this write, " +
+            Text = "Before continuing: back up your codeplug using the official AnyTone CPS or RT Systems " +
+                   "software as well. This tool takes its own automatic backup, but an official-software " +
+                   "backup is an independent recovery path if anything goes wrong that this tool's own " +
+                   "restore can't fix.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = warnBrush,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "A diagnostic session (audit log + memory backup) will also be saved automatically for this write, " +
                    "and you can send it to admin@hamsoft.co.uk afterwards if anything looks wrong.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
