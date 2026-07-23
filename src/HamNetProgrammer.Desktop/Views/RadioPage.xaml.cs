@@ -1215,19 +1215,32 @@ public sealed partial class RadioPage : Page
             return;
         }
 
-        var picker = new Windows.Storage.Pickers.FileOpenPicker();
-        picker.FileTypeFilter.Add(".bin");
-        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
-        var file = await picker.PickSingleFileAsync();
-        if (file is null) return;
-
-        var binPath = file.Path;
-        var manifestPath = Path.Combine(Path.GetDirectoryName(binPath)!, Path.GetFileNameWithoutExtension(binPath) + ".manifest.csv");
-        if (!File.Exists(manifestPath))
+        string binPath, manifestPath;
+        var candidates = MemoryDumpPicker.Scan(AppPaths.DumpsDirectory, AppPaths.DiagnosticsDirectory);
+        if (candidates.Count > 0)
         {
-            SetComplete(false, $"No matching .manifest.csv found next to {Path.GetFileName(binPath)} - pick a .bin file produced by Backup Radio Memory or another HamNetProgrammer dump.");
-            return;
+            var picked = await MemoryDumpPicker.ShowAsync(this.XamlRoot, candidates);
+            if (picked is null) return;
+            binPath = picked.BinPath;
+            manifestPath = picked.ManifestPath;
+        }
+        else
+        {
+            Log("No memory dumps found yet (Backup Radio Memory or any diagnostics session) - browsing for a file instead...");
+            var picker = new Windows.Storage.Pickers.FileOpenPicker();
+            picker.FileTypeFilter.Add(".bin");
+            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+            var file = await picker.PickSingleFileAsync();
+            if (file is null) return;
+
+            binPath = file.Path;
+            manifestPath = Path.Combine(Path.GetDirectoryName(binPath)!, Path.GetFileNameWithoutExtension(binPath) + ".manifest.csv");
+            if (!File.Exists(manifestPath))
+            {
+                SetComplete(false, $"No matching .manifest.csv found next to {Path.GetFileName(binPath)} - pick a .bin file produced by Backup Radio Memory or another HamNetProgrammer dump.");
+                return;
+            }
         }
 
         DumpReader dump;
