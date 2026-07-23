@@ -90,6 +90,14 @@ public static class MemoryDumpPicker
                     if (!File.Exists(manifestPath)) continue;
 
                     var fileName = Path.GetFileName(binPath);
+
+                    // Contribute Memory Sample dumps are deliberately excluded from restore
+                    // candidates - that feature exists to capture data from UNVALIDATED models
+                    // (reads there are often partial/failed on purpose), and it may not even be the
+                    // user's own radio. Offering it here risks someone restoring a partial/wrong-
+                    // model dump onto their real, working D878UV.
+                    if (fileName == "sample.bin") continue;
+
                     var kind = KnownFileLabels.TryGetValue(fileName, out var kindLabel) ? kindLabel : fileName;
                     entries.Add(new MemoryDumpEntry(binPath, manifestPath, File.GetCreationTimeUtc(binPath), $"{opLabel} ({kind})", deviceId, port));
                 }
