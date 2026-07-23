@@ -12,8 +12,15 @@ using SQLite as an open, inspectable source of truth instead.
 
 ## Status
 
-A working WinUI3 desktop application, hardware-verified against a real AT-D878UV. Not yet a general
-release - see [Roadmap](#roadmap).
+A working WinUI3 desktop application, hardware-verified against a real AT-D878UV - though
+"hardware-verified" varies by operation, not just by radio model. Write Codeplug, Read Codeplug, and
+Restore Previous Codeplug have been reliable across many real-radio sessions. Restore Radio Memory
+(restoring an arbitrary full dump, as opposed to undoing one specific write) has a rockier history:
+real hardware corruption incidents on 2026-07-17, 2026-07-19, and 2026-07-23, all from the same root
+cause (a shared flash erase block written outside its proper read-modify-write splice) recurring in
+slightly different forms - and none of this restore-path logic has automated test coverage yet, so
+each incident was only ever caught by writing to someone's actual radio. Treat it as the least-proven
+feature in the app until that changes. Not yet a general release - see [Roadmap](#roadmap).
 
 ### Features
 
@@ -42,7 +49,7 @@ release - see [Roadmap](#roadmap).
 
 | Model | Status |
 |---|---|
-| AnyTone AT-D878UV | Full read/write, hardware-verified. |
+| AnyTone AT-D878UV | Read, Write Codeplug, and Restore Previous Codeplug are hardware-verified and reliable. Restore Radio Memory (full-dump restore) works but has a real corruption history and no automated tests yet - see [Status](#status). |
 | AnyTone AT-D868UV / AT-D578UV / AT-D890UV | Believed protocol-compatible (same vendor SDK family) but **not hardware-verified** - writes require typed confirmation of the risk. Read-only memory-map contribution is the safest way to help extend real support. |
 | TYT MD-380 / MD-390 / MD-UV380 / MD-UV390 / MD2017, Baofeng DM-1701 | DFU-mode transport layer proven against real MD-380 hardware (see `HamNetProgrammer.Cli`'s `tyt-identify`/`tyt-dump` commands) - **read-only, CLI-only, no codeplug decode/write yet.** The protocol itself is documented by qdmr (see its `tyt_codeplug.cc`), just not wired into the desktop app or GUI. |
 

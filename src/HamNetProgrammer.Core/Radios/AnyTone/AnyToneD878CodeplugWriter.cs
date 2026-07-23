@@ -290,7 +290,7 @@ public static class AnyToneD878CodeplugWriter
     /// <summary>Waits for the given port to drop off USB (if it hasn't already) and reappear,
     /// then a short settle margin before it's safe to reopen - the same re-enumeration dance every
     /// session boundary on this radio needs, centralized here so callers don't duplicate it.</summary>
-    private static void WaitForPortDropThenReturn(string portName, int timeoutSeconds = 45)
+    internal static void WaitForPortDropThenReturn(string portName, int timeoutSeconds = 45)
     {
         var deadline = DateTime.Now + TimeSpan.FromSeconds(timeoutSeconds);
         while (DateTime.Now < deadline && SerialPort.GetPortNames().Contains(portName)) Thread.Sleep(500);
@@ -300,7 +300,7 @@ public static class AnyToneD878CodeplugWriter
         Thread.Sleep(1500);
     }
 
-    private static byte[] ReadRange(AnyToneD878Transport radio, uint address, int length)
+    internal static byte[] ReadRange(AnyToneD878Transport radio, uint address, int length)
     {
         var buffer = new byte[length];
         var offset = 0;
@@ -330,9 +330,25 @@ public static class AnyToneD878CodeplugWriter
         var length = AnyToneD878CodeplugEncoder.ZoneChannelDefaultsBlockLength;
         var buffer = ReadRange(radio, address, length);
 
-        // Every zone defaults to its first channel (position 0) for both VFO A and B.
+        // VFO A default channel per zone: cleared to 0x00 (= channel index 0, "first channel").
+        // Confirmed safe/correct as-is - matches what a working RT Systems codeplug also writes
+        // here byte-for-byte (real-hardware dump diff, 2026-07-23).
         Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneAChannelOffset, 512);
-        Array.Clear(buffer, AnyToneD878CodeplugEncoder.ZoneBChannelOffset, 512);
+
+        // VFO B default channel per zone: qdmr's own reference implementation
+        // (AnytoneCodeplug::ZoneChannelListElement::clear(), anytone_codeplug.cc) fills this table
+        // with 0xFF per byte (0xFFFF per zone slot), and its hasChannelB() explicitly treats 0xFFFF
+        // as "no default channel set" - 0x0000 is a real, valid channel-index-0 override, not an
+        // empty/cleared value. This encoder previously used Array.Clear (0x00) for both A and B,
+        // which is the confirmed root cause of a real-hardware symptom: the physical zone-scroll
+        // rocker went completely unresponsive (label still correctly read "Zone Up/Down", ZonesUsed
+        // bitmap was confirmed correct, only this table was wrong) - found 2026-07-23 by diffing a
+        // working RT Systems codeplug's zone-defaults block byte-for-byte against this encoder's
+        // output: RT Systems does NOT use 0x00 here (unlike for VFO A, where both agree), confirming
+        // 0x00 specifically breaks VFO B. Only VFO B is changed here - VFO A's 0x00 is independently
+        // confirmed correct against the same RT Systems reference, so it's left alone.
+        for (var i = 0; i < 512; i++)
+            buffer[AnyToneD878CodeplugEncoder.ZoneBChannelOffset + i] = 0xFF;
 
         // Defense in depth, not the confirmed fix (see AnyToneD878CodeplugEncoder.
         // GeneralUsedBitmapsBlockAddress's remarks for that): if the live "current zone" pointer

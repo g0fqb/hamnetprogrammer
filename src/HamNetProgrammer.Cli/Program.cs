@@ -8,6 +8,7 @@ using HamNetProgrammer.Core.Online;
 using HamNetProgrammer.Core.Planning;
 using HamNetProgrammer.Core.Radios.AnyTone;
 using HamNetProgrammer.Core.Radios.AnyTone.CallsignDb;
+using HamNetProgrammer.Core.Radios.AnyTone.Codecs;
 using HamNetProgrammer.Core.Radios.TyT;
 
 if (args.Length > 0 && args[0].Equals("import", StringComparison.OrdinalIgnoreCase))
@@ -81,6 +82,9 @@ if (args.Length > 0 && args[0].Equals("audit-talkgroups", StringComparison.Ordin
 
 if (args.Length > 0 && args[0].Equals("compare-dumps", StringComparison.OrdinalIgnoreCase))
     return RunCompareDumps(args.Skip(1).ToArray());
+
+if (args.Length > 0 && args[0].Equals("decode-channels", StringComparison.OrdinalIgnoreCase))
+    return RunDecodeChannels(args.Skip(1).ToArray());
 
 if (args.Length > 0 && args[0].Equals("tyt-identify", StringComparison.OrdinalIgnoreCase))
     return RunTytIdentify();
@@ -616,19 +620,21 @@ static int RunRestoreBlock(string[] args)
 {
     if (args.Length < 3)
     {
-        Console.WriteLine("Usage: HamNetProgrammer.Cli restore-block <port> <baselineSessionFolder> <roaming|generalbitmaps|zonedefaults>");
+        Console.WriteLine("Usage: HamNetProgrammer.Cli restore-block <port> <dumpBasePath> <roaming|generalbitmaps|zonedefaults|grouplists>");
+        Console.WriteLine("  <dumpBasePath> is a .bin/.manifest.csv pair without the extension, e.g.");
+        Console.WriteLine("  diagnostics\\20260723_100709_ID878UV2\\baseline_after");
         return 1;
     }
 
     var portName = args[0];
-    var sessionFolder = args[1];
+    var dumpBasePath = args[1];
     var blockName = args[2].ToLowerInvariant();
 
-    var baselinePath = Path.Combine(sessionFolder, "baseline_before.bin");
-    var manifestPath = Path.Combine(sessionFolder, "baseline_before.manifest.csv");
+    var baselinePath = dumpBasePath + ".bin";
+    var manifestPath = dumpBasePath + ".manifest.csv";
     if (!File.Exists(baselinePath) || !File.Exists(manifestPath))
     {
-        Console.WriteLine($"Could not find baseline_before.bin/.manifest.csv in {sessionFolder}");
+        Console.WriteLine($"Could not find {baselinePath} / {manifestPath}");
         return 1;
     }
 
@@ -639,11 +645,12 @@ static int RunRestoreBlock(string[] args)
         "roaming" => radio => AnyToneD878CodeplugRestorer.BuildRestoredRoamingBlock(radio, baseline),
         "generalbitmaps" => radio => AnyToneD878CodeplugRestorer.BuildRestoredGeneralUsedBitmapsBlock(radio, baseline),
         "zonedefaults" => radio => AnyToneD878CodeplugRestorer.BuildRestoredZoneChannelDefaults(radio, baseline),
+        "grouplists" => radio => AnyToneD878CodeplugRestorer.BuildRestoredGroupListsBlock(radio, baseline),
         _ => null!,
     };
     if (build is null)
     {
-        Console.WriteLine($"Unknown block '{blockName}' - expected roaming, generalbitmaps, or zonedefaults.");
+        Console.WriteLine($"Unknown block '{blockName}' - expected roaming, generalbitmaps, zonedefaults, or grouplists.");
         return 1;
     }
 
@@ -698,6 +705,62 @@ static int RunReadRegion(string[] readArgs)
         var ascii = string.Concat(chunk.ToArray().Select(b => b is >= 32 and < 127 ? (char)b : '.'));
         Console.WriteLine($"0x{address + i:x8}: {Convert.ToHexString(chunk),-64} {ascii}");
     }
+    return 0;
+}
+
+// Reads a dump's ChannelBank[N] records directly (not via SQLite - the dump is ground truth for
+// what's actually on the radio, and the SQLite database that produced a given write may not be the
+// one active on this machine), filters by a case-insensitive name substring, and for each match
+// decodes its ContactIndex and looks up the resulting TalkGroupList entry - so a "channel X keys to
+// the wrong talkgroup" report can be checked directly against the real bytes rather than guessed at.
+static int RunDecodeChannels(string[] args)
+{
+    if (args.Length < 2)
+    {
+        Console.WriteLine("Usage: HamNetProgrammer.Cli decode-channels <dumpBasePath> <nameSubstring>");
+        return 1;
+    }
+
+    var dump = DumpReader.Load(args[0] + ".bin", args[0] + ".manifest.csv");
+    var filter = args[1];
+
+    var bank = 0;
+    var matches = 0;
+    while (dump.HasRegion($"ChannelBank[{bank}]"))
+    {
+        for (var slot = 0; slot < 128; slot++)
+        {
+            var flatIndex = (uint)(bank * 128 + slot);
+            ChannelRecord? record;
+            try
+            {
+                record = ChannelRecordCodec.Decode(dump.GetChannelRecord(flatIndex));
+            }
+            catch
+            {
+                continue; // past the end of real channel data in this bank
+            }
+
+            if (record.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+            matches++;
+
+            string tgDescription;
+            try
+            {
+                var tg = TalkGroupRecordCodec.Decode(dump.GetTalkGroupRecord((int)record.ContactIndex));
+                tgDescription = $"{tg.Name} (TG{tg.DmrId})";
+            }
+            catch (Exception ex)
+            {
+                tgDescription = $"<could not decode: {ex.Message}>";
+            }
+
+            Console.WriteLine($"Channel #{flatIndex + 1} '{record.Name}': ContactIndex={record.ContactIndex} -> {tgDescription}");
+        }
+        bank++;
+    }
+
+    Console.WriteLine($"{matches} channel(s) matched '{filter}'.");
     return 0;
 }
 

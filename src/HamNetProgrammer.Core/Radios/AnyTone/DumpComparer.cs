@@ -53,6 +53,18 @@ public static class DumpComparer
                 continue;
             }
 
+            // RawFill_* and anything overlapping the three shared blocks is undocumented flash a
+            // restore deliberately never touches (see PlainRegionsForFullRestore's remarks) -
+            // comparing it just reports expected, by-design differences as false failures. Added
+            // 2026-07-23 after a real restore reported "24 mismatches" that were almost entirely
+            // this category, leaving genuine problems (e.g. RadioIdList/contacts) buried in noise.
+            var regionAddress = before.GetRegionAddress(name);
+            if (name.StartsWith("RawFill_", StringComparison.Ordinal) || AnyToneD878CodeplugRestorer.OverlapsAnySharedBlock(regionAddress, beforeData.Length))
+            {
+                skipped.Add(name);
+                continue;
+            }
+
             compared++;
 
             var baseAddress = before.GetRegionAddress(name);

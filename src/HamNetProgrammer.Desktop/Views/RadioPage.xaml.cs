@@ -1029,34 +1029,30 @@ public sealed partial class RadioPage : Page
                     Path.Combine(sessionFolder, "baseline_before.bin"),
                     Path.Combine(sessionFolder, "baseline_before.manifest.csv"));
 
-                List<RestoredRegion> restored;
-                using (var radio = new AnyToneD878Transport(port))
+                Log($"Identifying {port} before restoring...");
+                using (var identifyRadio = new AnyToneD878Transport(port))
                 {
-                    Log($"Opening {port}...");
-                    radio.Open();
-                    radio.StartProgrammingSession();
-                    var restoreDeviceId = radio.ReadDeviceId();
+                    identifyRadio.Open();
+                    identifyRadio.StartProgrammingSession();
+                    var restoreDeviceId = identifyRadio.ReadDeviceId();
                     SetConnectionStatus(true, DescribeDevice(restoreDeviceId, port));
-
-                    restored = AnyToneD878CodeplugRestorer.RestorePlainRegions(radio, baseline, writtenRegions, (region, index, total) =>
-                    {
-                        if (region.Skipped)
-                        {
-                            Log($"  [{index}/{total}] {region.Name}: skipped - {region.SkipReason}");
-                            auditLog.LogRegion(region.Name, region.Address, region.Length, "skipped", region.SkipReason);
-                        }
-                        else
-                        {
-                            Log($"  [{index}/{total}] {region.Name}: restored");
-                            auditLog.LogRegion(region.Name, region.Address, region.Length, "restored");
-                        }
-                        SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
-                    });
-
-                    Log("Ending programming session (this commits the restore)...");
-                    radio.EndProgrammingSession();
-                    radio.Close();
+                    identifyRadio.EndProgrammingSession();
                 }
+
+                var restored = AnyToneD878CodeplugRestorer.RestorePlainRegions(port, baseline, writtenRegions, AnyToneD878CodeplugRestorer.PlainRegionMaxBytesPerSession, (region, index, total) =>
+                {
+                    if (region.Skipped)
+                    {
+                        Log($"  [{index}/{total}] {region.Name}: skipped - {region.SkipReason}");
+                        auditLog.LogRegion(region.Name, region.Address, region.Length, "skipped", region.SkipReason);
+                    }
+                    else
+                    {
+                        Log($"  [{index}/{total}] {region.Name}: restored");
+                        auditLog.LogRegion(region.Name, region.Address, region.Length, "restored");
+                    }
+                    SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
+                }, msg => Log($"  {msg}"));
 
                 // Same isolated-session-plus-verify treatment as a fresh write. ZoneChannelDefaults
                 // MUST be restored LAST - proven on real hardware (2026-07-19) that
@@ -1383,8 +1379,17 @@ public sealed partial class RadioPage : Page
                 auditLog.LogNote($"Safety backup: {safetyResults.Count} regions, {safetyFailed} failed.");
 
                 var plainRegions = AnyToneD878CodeplugRestorer.PlainRegionsForFullRestore(dump);
-                Log($"Restoring {plainRegions.Count} plain region(s) in this session...");
-                var restored = AnyToneD878CodeplugRestorer.RestorePlainRegions(radio, dump, plainRegions, (region, index, total) =>
+                Log($"Restoring {plainRegions.Count} plain region(s) across as many isolated, verified sessions as it takes...");
+
+                // Everything from here on manages its own port sessions from scratch (see
+                // RestorePlainRegions' remarks on why one big unverified commit isn't safe for a
+                // full restore) - the identify session that opened `radio` at the top of this
+                // method has no further use, so release it now rather than leaving it open and
+                // unused while a different session is doing the actual writing.
+                radio.Close();
+                committed = true;
+
+                var restored = AnyToneD878CodeplugRestorer.RestorePlainRegions(port, dump, plainRegions, AnyToneD878CodeplugRestorer.PlainRegionMaxBytesPerSession, (region, index, total) =>
                 {
                     if (region.Skipped)
                     {
@@ -1396,12 +1401,8 @@ public sealed partial class RadioPage : Page
                         auditLog.LogRegion(region.Name, region.Address, region.Length, "written");
                     }
                     SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
-                });
+                }, msg => Log($"  {msg}"));
 
-                Log("Ending programming session (this commits the plain-region restore)...");
-                radio.EndProgrammingSession();
-                radio.Close();
-                committed = true;
                 auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
 
                 var sharedBlockFailures = new List<string>();
@@ -1454,6 +1455,11 @@ public sealed partial class RadioPage : Page
                 // Write Codeplug/Restore Previous Codeplug (GeneralUsedBitmapsBlock is physically
                 // contiguous with it on the same flash die and disturbs it as a side effect if
                 // written afterward).
+                // GroupListsBlock is at a wholly different address (0x02980000) with no known
+                // adjacency to the other three - order relative to them doesn't matter, only that
+                // it gets its own isolated session like they do.
+                WriteSharedBlockAndCheck("GroupListsBlock", AnyToneD878CodeplugRestorer.DumpHasGroupListsBlockData(dump),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredGroupListsBlock(r, dump));
                 WriteSharedBlockAndCheck("RoamingBlock", AnyToneD878CodeplugRestorer.DumpHasRoamingBlockData(dump),
                     r => AnyToneD878CodeplugRestorer.BuildRestoredRoamingBlock(r, dump));
                 WriteSharedBlockAndCheck("GeneralUsedBitmapsBlock", AnyToneD878CodeplugRestorer.DumpHasGeneralUsedBitmapsBlockData(dump),
@@ -1552,7 +1558,21 @@ public sealed partial class RadioPage : Page
             {
                 Log($"Error: {ex.Message}");
                 if (committed)
+                {
                     Log("The restore had already partly committed before this error - a pre-restore safety backup was taken (pre_restore_backup.bin in this session's diagnostics folder).");
+                }
+                else
+                {
+                    // Not yet committed means EndProgrammingSession was never reached, so per
+                    // WriteMemory's remarks any writes sent so far are still buffered on the radio,
+                    // not yet flushed to flash - deliberately NOT calling EndProgrammingSession here
+                    // (that's the one thing that commits them). Just release the port so the radio
+                    // isn't left stuck in an open programming session with no way back in - the
+                    // pre-restore safety backup is still the right thing to restore from.
+                    Log("Releasing the radio without committing (failure occurred before the commit step)...");
+                    try { radio.Close(); }
+                    catch (Exception closeEx) { Log($"Error releasing radio: {closeEx.Message}"); }
+                }
                 auditLog.End("failed", ex.Message);
                 return (Success: false, Message: ex.Message);
             }
