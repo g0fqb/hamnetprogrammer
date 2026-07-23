@@ -49,6 +49,48 @@ public static class AnyToneD878CodeplugRestorer
         ("AnalogAprsList", 0x1800),
     ];
 
+    // Every dump region name that lives inside one of the three shared read-modify-write blocks -
+    // these must never be written as standalone plain regions (that's exactly the 2026-07-17
+    // lock-screen incident), only ever spliced into their block via the BuildRestoredXxx methods
+    // above. A raw full dump lists every one of these individually by name (it doesn't know they
+    // share an erase block), so restoring a WHOLE dump wholesale - as opposed to just a write
+    // session's touched subset - needs to exclude them explicitly. See PlainRegionsForFullRestore.
+    private static readonly string[] SharedBlockSubRegionNames =
+        ZoneChannelDefaultsSubRegions.Select(r => r.Name)
+            .Concat(["RoamingChannels", "RoamingChannelsUsed", "RoamingZonesUsed", "RoamingZones"])
+            .Concat(["ZonesUsed", "RadioIdListUsed", "ScanListsUsed"])
+            .ToArray();
+
+    /// <summary>Every region in a full dump that should be restored as a standalone plain write
+    /// when restoring the WHOLE dump (as opposed to just what one write session touched) - i.e.
+    /// everything the dump captured successfully, except the shared-block sub-regions above
+    /// (restored only via their Build* splice methods, in their own isolated sessions) and the
+    /// large per-bank regions (ChannelBank[N]/TalkGroupList[N]), which need their own isolated
+    /// verified session same as a fresh write - see AnyToneD878CodeplugWriter's remarks on why
+    /// those can't be bundled reliably.</summary>
+    public static IReadOnlyList<(string Name, uint Address, int Length)> PlainRegionsForFullRestore(DumpReader dump) =>
+        dump.RegionNames
+            .Where(dump.RegionSucceeded)
+            .Where(name => !SharedBlockSubRegionNames.Contains(name))
+            .Where(name => !name.StartsWith("ChannelBank[", StringComparison.Ordinal) && !name.StartsWith("TalkGroupList[", StringComparison.Ordinal))
+            .Select(name => (name, dump.GetRegionAddress(name), dump.GetRegion(name).Length))
+            .ToList();
+
+    // The Has*(writtenRegions) overloads below check for the synthetic composite names
+    // (e.g. "ZoneChannelDefaults (read-modify-write)") that only ever appear in a write/restore
+    // session's audit log - a raw dump never contains them, only the individual sub-regions. These
+    // Dump-prefixed variants check the dump directly instead, for a whole-dump restore.
+    public static bool DumpHasZoneChannelDefaultsData(DumpReader dump) =>
+        ZoneChannelDefaultsSubRegions.Any(r => dump.HasRegion(r.Name) && dump.RegionSucceeded(r.Name));
+
+    public static bool DumpHasRoamingBlockData(DumpReader dump) =>
+        new[] { "RoamingChannels", "RoamingChannelsUsed", "RoamingZonesUsed", "RoamingZones" }
+            .Any(name => dump.HasRegion(name) && dump.RegionSucceeded(name));
+
+    public static bool DumpHasGeneralUsedBitmapsBlockData(DumpReader dump) =>
+        new[] { "ZonesUsed", "RadioIdListUsed", "ScanListsUsed" }
+            .Any(name => dump.HasRegion(name) && dump.RegionSucceeded(name));
+
     public static bool HasZoneChannelDefaults(IReadOnlyList<(string Name, uint Address, int Length)> writtenRegions) =>
         writtenRegions.Any(r => r.Name == ZoneChannelDefaultsRegionName);
 

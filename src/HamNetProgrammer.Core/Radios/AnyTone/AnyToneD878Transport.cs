@@ -26,9 +26,22 @@ public sealed class AnyToneD878Transport : IDisposable
 
     public void Open() => _port.Open();
 
+    // Closing after EndProgrammingSession races the radio's own USB drop-off/re-enumerate: if the
+    // underlying device has already physically disappeared by the time this runs (timing-
+    // dependent, and more readily hit under VM USB passthrough than on bare metal), SerialPort.Close()
+    // can throw (observed as Win32 error 433, "A device which does not exist was specified").
+    // There's nothing left to release at that point, so this is a no-op that failed to happen, not
+    // a real error - letting it throw here was overwriting an otherwise-successful Read Codeplug
+    // (dump + decode + import already committed) with a spurious "Failed" result, since this runs
+    // inside the caller's `using` disposal, still within their try/catch.
     public void Close()
     {
-        if (_port.IsOpen) _port.Close();
+        try
+        {
+            if (_port.IsOpen) _port.Close();
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     public void Dispose() => Close();

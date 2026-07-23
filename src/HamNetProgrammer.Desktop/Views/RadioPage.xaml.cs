@@ -113,6 +113,7 @@ public sealed partial class RadioPage : Page
             AutoDetectButton.IsEnabled = enabled;
             WriteCodeplugButton.IsEnabled = enabled && _connected;
             BackupButton.IsEnabled = enabled && _connected;
+            RestoreRadioMemoryButton.IsEnabled = enabled && _connected;
             ReadCodeplugButton.IsEnabled = enabled && _connected;
             SyncReferenceDataButton.IsEnabled = enabled && _connected;
             ContributeSampleButton.IsEnabled = enabled && _connected;
@@ -387,6 +388,26 @@ public sealed partial class RadioPage : Page
         {
             SetComplete(false, "Select a port first.");
             return;
+        }
+
+        // Hard block, not just a warning - writes an empty/near-empty database over a radio's real
+        // configuration, silently, with no error at the radio end (unlike the erase-block/lock-
+        // screen failure mode, this "succeeds" perfectly, it just erases everything). Found via a
+        // real near-miss on a fresh install where Write Codeplug got clicked before Read Codeplug
+        // or a CSV import had ever populated the database. Checked before ConfirmContactsFreshEnoughAsync
+        // and before ever touching the radio, since there's no reason to open a session at all if
+        // this is going to refuse anyway.
+        using (var emptyCheckDb = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath))
+        using (var zoneCountCmd = emptyCheckDb.CreateCommand())
+        {
+            zoneCountCmd.CommandText = "SELECT COUNT(*) FROM Zones;";
+            var totalZones = Convert.ToInt32(zoneCountCmd.ExecuteScalar());
+            if (totalZones == 0)
+            {
+                Log("Write Codeplug refused: the local database has no zones at all.");
+                SetComplete(false, "Your local codeplug database is empty (no zones) - writing this would erase everything currently on the radio. Use Read Codeplug from the radio, or import a CSV, before writing.");
+                return;
+            }
         }
 
         if (!await ConfirmContactsFreshEnoughAsync())
@@ -1173,6 +1194,358 @@ public sealed partial class RadioPage : Page
         // a panel most people don't know is there. Set unconditionally (not just on failure) so
         // it's available either way, matching what Write Codeplug already does.
         _lastDiagnosticsSession = sessionFolder;
+        SetComplete(result.Success, result.Message);
+        SetBusy(false);
+    }
+
+    /// <summary>Writes an ENTIRE arbitrary full memory dump (from Backup Radio Memory, or any past
+    /// diagnostics-folder dump) back to the radio - the actual counterpart Backup Radio Memory was
+    /// missing (Restore Previous Codeplug only ever undoes one specific Write Codeplug session's
+    /// own automatic baseline, it can't consume a manual backup at all). Reuses the exact same
+    /// tiered writer machinery Write Codeplug/Restore Previous Codeplug already use (plain bundled
+    /// session, isolated-verified per-bank sessions for ChannelBank[]/TalkGroupList[], and the
+    /// three shared-block regions last in their required order) - just driven by "every region the
+    /// chosen dump captured" instead of "what one write session's audit log says it touched".</summary>
+    private async void OnRestoreRadioMemoryClicked(object sender, RoutedEventArgs e)
+    {
+        if (_operationInProgress) return;
+        if (SelectedPort is not { } port)
+        {
+            SetComplete(false, "Select a port first.");
+            return;
+        }
+
+        var picker = new Windows.Storage.Pickers.FileOpenPicker();
+        picker.FileTypeFilter.Add(".bin");
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+        var file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+
+        var binPath = file.Path;
+        var manifestPath = Path.Combine(Path.GetDirectoryName(binPath)!, Path.GetFileNameWithoutExtension(binPath) + ".manifest.csv");
+        if (!File.Exists(manifestPath))
+        {
+            SetComplete(false, $"No matching .manifest.csv found next to {Path.GetFileName(binPath)} - pick a .bin file produced by Backup Radio Memory or another HamNetProgrammer dump.");
+            return;
+        }
+
+        DumpReader dump;
+        try
+        {
+            dump = DumpReader.Load(binPath, manifestPath);
+        }
+        catch (Exception ex)
+        {
+            SetComplete(false, $"Could not read that dump: {ex.Message}");
+            return;
+        }
+
+        SetBusy(true, "Identifying radio...");
+        Log($"Opening {port} to identify the radio...");
+
+        (AnyToneD878Transport Radio, string DeviceId) identified;
+        try
+        {
+            identified = await Task.Run(() =>
+            {
+                var r = new AnyToneD878Transport(port);
+                r.Open();
+                r.StartProgrammingSession();
+                var id = r.ReadDeviceId();
+                return (r, id);
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"Error identifying device: {ex.Message}");
+            SetConnectionStatus(false, "Not connected.");
+            SetComplete(false, $"Could not identify device: {ex.Message}");
+            SetBusy(false);
+            return;
+        }
+
+        var radio = identified.Radio;
+        var deviceId = identified.DeviceId;
+        var profile = RadioRiskCatalog.Lookup(deviceId);
+        Log($"Device identifier: {deviceId} ({profile.ModelLabel}, {profile.Tier} risk).");
+        SetConnectionStatus(true, DescribeDevice(deviceId, port));
+        SetBusy(false);
+
+        // Same hard block as Write Codeplug - restoring an arbitrary full dump onto an unvalidated
+        // model is at least as risky (blind whole-region replacement, no per-field sanity checks at
+        // all), so it gets no weaker a gate.
+        if (profile.Tier != RadioRiskTier.Validated)
+        {
+            Log($"Restore Radio Memory refused: {profile.ModelLabel} is {profile.Tier} risk, not hardware-verified.");
+            try
+            {
+                await Task.Run(() => { radio.EndProgrammingSession(); radio.Close(); });
+            }
+            catch (Exception ex)
+            {
+                Log($"Error releasing radio: {ex.Message}");
+            }
+            SetComplete(false, $"{profile.ModelLabel} isn't a hardware-verified model for Restore Radio Memory. Use \"Contribute a Memory Sample\" instead so this model can be properly validated first.");
+            return;
+        }
+
+        var regionCount = dump.RegionNames.Count(dump.RegionSucceeded);
+        var ackBox = new TextBox { PlaceholderText = "OVERWRITE RADIO" };
+        var panel = new StackPanel { Spacing = 10, MaxWidth = 460 };
+        panel.Children.Add(new TextBlock
+        {
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0xe9, 0x45, 0x60)),
+            TextWrapping = TextWrapping.Wrap,
+            Text = $"This overwrites the radio's ENTIRE current configuration with the {regionCount}-region dump in {Path.GetFileName(binPath)}. Everything currently on the radio that isn't captured in this file will be lost.",
+        });
+        panel.Children.Add(new TextBlock
+        {
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Text = "A full backup of the radio's CURRENT state will be taken automatically first, before anything is written, as a safety net.",
+        });
+        panel.Children.Add(new TextBlock { FontSize = 12, Text = "Type \"OVERWRITE RADIO\" to continue:" });
+        panel.Children.Add(ackBox);
+
+        var confirmDialog = new ContentDialog
+        {
+            Title = $"{Glyphs.IconAlert}  Restore Radio Memory",
+            Content = panel,
+            PrimaryButtonText = "Restore",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = this.XamlRoot,
+        };
+        confirmDialog.PrimaryButtonClick += (_, args) =>
+        {
+            if (!string.Equals(ackBox.Text.Trim(), "OVERWRITE RADIO", StringComparison.OrdinalIgnoreCase))
+                args.Cancel = true;
+        };
+
+        if (await confirmDialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            Log("Restore Radio Memory cancelled - releasing the radio...");
+            try
+            {
+                await Task.Run(() => { radio.EndProgrammingSession(); radio.Close(); });
+            }
+            catch (Exception ex)
+            {
+                Log($"Error releasing radio: {ex.Message}");
+            }
+            return;
+        }
+
+        SetRebootNoticeVisible(true);
+
+        var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var safeDeviceId = string.Join("_", deviceId.Split(Path.GetInvalidFileNameChars()));
+        var sessionFolder = Path.Combine(AppPaths.DiagnosticsDirectory, $"{stamp}_restoremem_{safeDeviceId}");
+        Directory.CreateDirectory(sessionFolder);
+        _lastDiagnosticsSession = sessionFolder;
+        var toolVersion = typeof(RadioPage).Assembly.GetName().Version?.ToString() ?? "dev";
+
+        var result = await Task.Run(() =>
+        {
+            using var auditLog = WriteSessionAuditLog.Start(
+                Path.Combine(sessionFolder, "audit.jsonl"), "restore-radio-memory", port, deviceId, toolVersion);
+            var committed = false;
+
+            try
+            {
+                Log("Taking a safety backup of the radio's current state before restoring...");
+                auditLog.LogNote("Taking pre-restore safety backup.");
+                var safetyResults = AnyToneD878MemoryDumper.Dump(radio,
+                    Path.Combine(sessionFolder, "pre_restore_backup.bin"),
+                    Path.Combine(sessionFolder, "pre_restore_backup.manifest.csv"),
+                    (region, index, total, bytesDone, totalBytes) =>
+                    {
+                        SetProgress(bytesDone, totalBytes, $"Safety backup before restoring... [{index}/{total}] {region.Name}");
+                        if (index % 40 == 0 || index == total) Log($"  safety backup [{index}/{total}] {region.Name}");
+                    });
+                var safetyFailed = safetyResults.Count(r => !r.Succeeded);
+                Log($"Safety backup complete ({safetyResults.Count} regions, {safetyFailed} failed). Same session, no reboot needed yet.");
+                auditLog.LogNote($"Safety backup: {safetyResults.Count} regions, {safetyFailed} failed.");
+
+                var plainRegions = AnyToneD878CodeplugRestorer.PlainRegionsForFullRestore(dump);
+                Log($"Restoring {plainRegions.Count} plain region(s) in this session...");
+                var restored = AnyToneD878CodeplugRestorer.RestorePlainRegions(radio, dump, plainRegions, (region, index, total) =>
+                {
+                    if (region.Skipped)
+                    {
+                        Log($"  [{index}/{total}] {region.Name}: skipped - {region.SkipReason}");
+                        auditLog.LogRegion(region.Name, region.Address, region.Length, "skipped", region.SkipReason);
+                    }
+                    else
+                    {
+                        auditLog.LogRegion(region.Name, region.Address, region.Length, "written");
+                    }
+                    SetProgress(index, total, $"Restoring... [{index}/{total}] {region.Name}");
+                });
+
+                Log("Ending programming session (this commits the plain-region restore)...");
+                radio.EndProgrammingSession();
+                radio.Close();
+                committed = true;
+                auditLog.LogNote(WriteSessionAuditLog.CommitConfirmedMessage);
+
+                var sharedBlockFailures = new List<string>();
+
+                var bankFailures = new List<string>();
+                foreach (var bankName in dump.RegionNames.Where(n => n.StartsWith("ChannelBank[", StringComparison.Ordinal)).OrderBy(n => n))
+                {
+                    if (!dump.RegionSucceeded(bankName))
+                    {
+                        Log($"  Skipping {bankName} - not captured successfully in this dump.");
+                        continue;
+                    }
+                    SetBusy(true, $"Restoring and verifying {bankName}...");
+                    var region = new EncodedRegion(bankName, dump.GetRegionAddress(bankName), dump.GetRegion(bankName).ToArray());
+                    var verified = AnyToneD878CodeplugWriter.WriteRegionChunkedAndVerify(port, region, 20_000, msg =>
+                    {
+                        Log($"  {msg}");
+                        auditLog.LogNote(msg);
+                    });
+                    if (verified)
+                        auditLog.LogRegion(bankName, region.Address, region.Data.Length, "written and verified");
+                    else
+                        bankFailures.Add($"{bankName} did not verify correctly.");
+                }
+
+                foreach (var bankName in dump.RegionNames.Where(n => n.StartsWith("TalkGroupList[", StringComparison.Ordinal)).OrderBy(n => n))
+                {
+                    if (!dump.RegionSucceeded(bankName))
+                    {
+                        Log($"  Skipping {bankName} - not captured successfully in this dump.");
+                        continue;
+                    }
+                    SetBusy(true, $"Restoring and verifying {bankName}...");
+                    var region = new EncodedRegion(bankName, dump.GetRegionAddress(bankName), dump.GetRegion(bankName).ToArray());
+                    var verified = AnyToneD878CodeplugWriter.WriteRegionChunkedAndVerify(port, region, 200_000, msg =>
+                    {
+                        Log($"  {msg}");
+                        auditLog.LogNote(msg);
+                    });
+                    if (verified)
+                        auditLog.LogRegion(bankName, region.Address, region.Data.Length, "written and verified");
+                    else
+                        bankFailures.Add($"{bankName} did not verify correctly.");
+                }
+
+                if (bankFailures.Count > 0)
+                    sharedBlockFailures.AddRange(bankFailures);
+
+                // Required order - ZoneChannelDefaults MUST be restored LAST, same reason as
+                // Write Codeplug/Restore Previous Codeplug (GeneralUsedBitmapsBlock is physically
+                // contiguous with it on the same flash die and disturbs it as a side effect if
+                // written afterward).
+                WriteSharedBlockAndCheck("RoamingBlock", AnyToneD878CodeplugRestorer.DumpHasRoamingBlockData(dump),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredRoamingBlock(r, dump));
+                WriteSharedBlockAndCheck("GeneralUsedBitmapsBlock", AnyToneD878CodeplugRestorer.DumpHasGeneralUsedBitmapsBlockData(dump),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredGeneralUsedBitmapsBlock(r, dump));
+                WriteSharedBlockAndCheck("ZoneChannelDefaults", AnyToneD878CodeplugRestorer.DumpHasZoneChannelDefaultsData(dump),
+                    r => AnyToneD878CodeplugRestorer.BuildRestoredZoneChannelDefaults(r, dump));
+
+                void WriteSharedBlockAndCheck(string label, bool needed, Func<AnyToneD878Transport, EncodedRegion> build)
+                {
+                    if (!needed) return;
+                    SetBusy(true, $"Restoring and verifying {label}...");
+                    var writeResult = AnyToneD878CodeplugWriter.WriteAndVerifySharedBlock(port, build, msg =>
+                    {
+                        Log($"  [{label}] {msg}");
+                        auditLog.LogNote($"{label}: {msg}");
+                    });
+                    if (writeResult.Verified)
+                        auditLog.LogRegion(label, writeResult.Address, writeResult.Length, $"written and verified (attempt {writeResult.Attempts})");
+                    else
+                    {
+                        sharedBlockFailures.Add(writeResult.Error ?? $"{label} failed to verify.");
+                        auditLog.LogNote($"FAILED: {writeResult.Error}");
+                    }
+                }
+
+                Log("Restore complete. Waiting for the radio to re-enumerate for a verification pass...");
+                SetBusy(true, "Waiting for radio to re-enumerate...");
+
+                var verified2 = false;
+                DumpComparisonResult? comparison = null;
+                if (WaitForPortToReturn(port, TimeSpan.FromSeconds(45)))
+                {
+                    Log("Radio is back - taking verification backup...");
+                    using var afterRadio = new AnyToneD878Transport(port);
+                    afterRadio.Open();
+                    afterRadio.StartProgrammingSession();
+                    afterRadio.ReadDeviceId();
+                    var afterResults = AnyToneD878MemoryDumper.Dump(afterRadio,
+                        Path.Combine(sessionFolder, "post_restore.bin"),
+                        Path.Combine(sessionFolder, "post_restore.manifest.csv"),
+                        (region, index, total, bytesDone, totalBytes) =>
+                        {
+                            SetProgress(bytesDone, totalBytes, $"Verifying... [{index}/{total}] {region.Name}");
+                            if (index % 40 == 0 || index == total) Log($"  verify [{index}/{total}] {region.Name}");
+                        });
+                    afterRadio.EndProgrammingSession();
+                    var failed = afterResults.Count(r => !r.Succeeded);
+                    auditLog.LogNote($"Post-restore backup: {afterResults.Count} regions, {failed} failed.");
+
+                    var afterDump = DumpReader.Load(
+                        Path.Combine(sessionFolder, "post_restore.bin"),
+                        Path.Combine(sessionFolder, "post_restore.manifest.csv"));
+                    comparison = DumpComparer.Compare(dump, afterDump);
+                    verified2 = comparison.AllMatch;
+
+                    if (verified2)
+                        Log($"Verified: all {comparison.RegionsCompared} compared region(s) now match the chosen dump exactly.");
+                    else
+                    {
+                        Log($"WARNING: {comparison.MismatchedRegionNames.Count} region(s) differ from the chosen dump:");
+                        foreach (var name in comparison.MismatchedRegionNames) Log($"  MISMATCH: {name}");
+                    }
+                    auditLog.LogNote($"Post-restore verification: {comparison.RegionsCompared} compared, {comparison.MismatchedRegionNames.Count} mismatch(es).");
+                    SetConnectionStatus(true, DescribeDevice(deviceId, port));
+                }
+                else
+                {
+                    Log("WARNING: radio did not re-enumerate within 45s after restore.");
+                    auditLog.LogNote("WARNING: radio did not re-enumerate within 45s after restore.");
+                    SetConnectionStatus(false, "Not connected - radio did not re-enumerate.");
+                }
+
+                if (sharedBlockFailures.Count > 0)
+                {
+                    Log("WARNING: one or more regions did not verify correctly even after automatic retries:");
+                    foreach (var f in sharedBlockFailures) Log($"  {f}");
+                    auditLog.End("failed", string.Join(" | ", sharedBlockFailures));
+                    return (Success: false,
+                        Message: $"Restore mostly completed but {sharedBlockFailures.Count} region(s) failed to verify - a pre-restore safety backup was taken (pre_restore_backup.bin in this session's diagnostics folder). Use Send Diagnostic Report to have this investigated.");
+                }
+
+                if (!verified2)
+                {
+                    var mismatchCount = comparison?.MismatchedRegionNames.Count ?? 0;
+                    auditLog.End("failed", $"{mismatchCount} region(s) differ from the chosen dump after restore.");
+                    return (Success: false,
+                        Message: mismatchCount > 0
+                            ? $"Restore completed but {mismatchCount} region(s) still differ from the chosen dump - do not assume the radio matches it. A pre-restore safety backup was taken if you need to back out. Use Send Diagnostic Report to have this investigated."
+                            : "Restore completed but could not be verified (radio didn't re-enumerate in time).");
+                }
+
+                auditLog.End("success");
+                return (Success: true, Message: $"Restore complete and verified: radio now matches {Path.GetFileName(binPath)}.");
+            }
+            catch (Exception ex)
+            {
+                Log($"Error: {ex.Message}");
+                if (committed)
+                    Log("The restore had already partly committed before this error - a pre-restore safety backup was taken (pre_restore_backup.bin in this session's diagnostics folder).");
+                auditLog.End("failed", ex.Message);
+                return (Success: false, Message: ex.Message);
+            }
+        });
+
+        SetRebootNoticeVisible(false);
         SetComplete(result.Success, result.Message);
         SetBusy(false);
     }

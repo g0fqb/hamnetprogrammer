@@ -51,68 +51,109 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Write codeplug to radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Encodes the current SQLite codeplug and writes it to the radio across several programming sessions. The radio will restart itself several times during this - that's expected, not an error - and returns to normal once it finishes." />
-                                <Button x:Name="WriteCodeplugButton" Content="Write Codeplug to Radio" Click="OnWriteCodeplugClicked" Background="#e0924a" Foreground="#10161d" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Border>
+                        <!-- High-Level group: the decoded, editable codeplug database (Zones/
+                             Channels/Contacts/Lists) - what you actually work with in this app. Left
+                             border accent (teal) distinguishes it at a glance from the Low-Level
+                             group's raw-byte operations opposite it, so the two are never mistaken
+                             for a matched pair the way "Backup"/"Restore Previous" used to read. -->
+                        <Border Background="#152025" BorderBrush="#6bb0b8" BorderThickness="0,0,0,2" CornerRadius="6" Padding="14,10,14,14">
+                            <StackPanel Spacing="10">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Codeplug Database - High-Level" FontSize="13" FontWeight="Bold" Foreground="#6bb0b8" />
+                                    <TextBlock FontSize="11" Foreground="#8896a0" TextWrapping="Wrap"
+                                               Text="Decoded zones/channels/contacts/lists - what you edit elsewhere in this app. These operations translate between that database and the radio." />
+                                </StackPanel>
 
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Backup radio memory" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Reads every known memory region from the radio to a timestamped .bin + .manifest.csv pair in the dumps folder. Safe, read-only." />
-                                <Button x:Name="BackupButton" Content="Backup Radio Memory" Click="OnBackupClicked" />
-                            </StackPanel>
-                        </Border>
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Write codeplug to radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Encodes the current SQLite codeplug and writes it to the radio across several programming sessions. The radio will restart itself several times during this - that's expected, not an error - and returns to normal once it finishes." />
+                                        <Button x:Name="WriteCodeplugButton" Content="Write Codeplug to Radio" Click="OnWriteCodeplugClicked" Background="#e0924a" Foreground="#10161d" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
 
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Read codeplug from radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Reads the radio (safe, same as Backup) and brings its zones/channels/contacts/lists into this database - a good first step if your radio is already set up. New items are added; items already here that match by name or channel number get their details and membership refreshed to match the radio. Nothing already in the database is deleted, so this is safe to run again later or from a second radio sharing the same codeplug. Only available for a hardware-verified radio model." />
-                                <Button x:Name="ReadCodeplugButton" Content="Read Codeplug from Radio" Click="OnReadCodeplugClicked" />
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Read codeplug from radio" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Reads the radio (safe, same as Backup) and brings its zones/channels/contacts/lists into this database - a good first step if your radio is already set up. New items are added; items already here that match by name or channel number get their details and membership refreshed to match the radio. Nothing already in the database is deleted, so this is safe to run again later or from a second radio sharing the same codeplug. Only available for a hardware-verified radio model." />
+                                        <Button x:Name="ReadCodeplugButton" Content="Read Codeplug from Radio" Click="OnReadCodeplugClicked" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Restore previous codeplug" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Pick from any past Write Codeplug run and write back exactly what it overwrote, from the automatic backup taken just before it - a way to back out if something looks wrong, even days later. If that write never actually reached the radio, this instead takes a fresh dump and proves the radio still matches the pre-write backup, rather than just assuming it." />
+                                        <Button x:Name="RestoreButton" Content="Restore Previous Codeplug" Click="OnRestoreClicked" IsEnabled="False" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Sync reference data" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Writes your talkgroup list and the full radioid.net individual-callsign database (for caller ID on people you haven't added yourself) to the radio. This is separate from Write Codeplug because it rarely changes and takes far longer to upload - run it every few weeks, not after every small edit." />
+                                        <Button x:Name="SyncReferenceDataButton" Content="Sync Reference Data" Click="OnSyncReferenceDataClicked" />
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Spacing="12">
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Sync reference data" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Writes your talkgroup list and the full radioid.net individual-callsign database (for caller ID on people you haven't added yourself) to the radio. This is separate from Write Codeplug because it rarely changes and takes far longer to upload - run it every few weeks, not after every small edit." />
-                                <Button x:Name="SyncReferenceDataButton" Content="Sync Reference Data" Click="OnSyncReferenceDataClicked" />
-                            </StackPanel>
-                        </Border>
+                        <!-- Low-Level group: exact bytes, model-specific, no understanding of what
+                             they mean - the raw-memory counterpart to the High-Level group opposite.
+                             Backup Radio Memory and Restore Radio Memory are the actual matched pair
+                             here (Restore Previous Codeplug, despite the name, is a Write Codeplug
+                             feature - it lives in the other group). Amber accent (matches the
+                             app's primary/warning colour) to read as "handle with care - raw bytes,
+                             not the friendly editable database". -->
+                        <Border Background="#221a12" BorderBrush="#e0924a" BorderThickness="0,0,0,2" CornerRadius="6" Padding="14,10,14,14">
+                            <StackPanel Spacing="10">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Raw Memory - Low-Level" FontSize="13" FontWeight="Bold" Foreground="#e0924a" />
+                                    <TextBlock FontSize="11" Foreground="#8896a0" TextWrapping="Wrap"
+                                               Text="Exact radio bytes, for backup/recovery or extending support to other models - not decoded into the codeplug database above." />
+                                </StackPanel>
 
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Contribute a memory-map sample" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Read-only - never writes anything to the radio. Helps extend support to other AnyTone-family models we don't own by capturing what's actually at each known memory address. Most useful if your radio isn't a D878UV." />
-                                <Button x:Name="ContributeSampleButton" Content="Contribute Memory Sample" Click="OnContributeSampleClicked" />
-                            </StackPanel>
-                        </Border>
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Backup radio memory" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Reads every known memory region from the radio to a timestamped .bin + .manifest.csv pair in the dumps folder. Safe, read-only. Pairs with Restore Radio Memory below, which can write one of these files back." />
+                                        <Button x:Name="BackupButton" Content="Backup Radio Memory" Click="OnBackupClicked" />
+                                    </StackPanel>
+                                </Border>
 
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Restore previous codeplug" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Pick from any past Write Codeplug run and write back exactly what it overwrote, from the automatic backup taken just before it - a way to back out if something looks wrong, even days later. If that write never actually reached the radio, this instead takes a fresh dump and proves the radio still matches the pre-write backup, rather than just assuming it." />
-                                <Button x:Name="RestoreButton" Content="Restore Previous Codeplug" Click="OnRestoreClicked" IsEnabled="False" />
-                            </StackPanel>
-                        </Border>
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Restore radio memory" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Pick any past .bin memory dump (from Backup Radio Memory, or another diagnostics session) and write its ENTIRE contents back to the radio, overwriting everything currently there. A safety backup of the radio's current state is taken automatically first. Only available for a hardware-verified radio model." />
+                                        <Button x:Name="RestoreRadioMemoryButton" Content="Restore Radio Memory" Click="OnRestoreRadioMemoryClicked" />
+                                    </StackPanel>
+                                </Border>
 
-                        <Border Background="#1a232c" CornerRadius="6" Padding="14">
-                            <StackPanel Spacing="8">
-                                <TextBlock Text="Diagnostic report" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
-                                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
-                                           Text="Every Write Codeplug or Restore run automatically saves a before/after memory backup and a log of every region written. If something looks wrong - including a failure message that points here - send that report so it can be investigated, no need to attach anything yourself or dig through the log panel." />
-                                <Button x:Name="SendReportButton" Content="Send Diagnostic Report" Click="OnSendReportClicked" IsEnabled="False" />
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Contribute a memory-map sample" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Read-only - never writes anything to the radio. Helps extend support to other AnyTone-family models we don't own by capturing what's actually at each known memory address. Most useful if your radio isn't a D878UV." />
+                                        <Button x:Name="ContributeSampleButton" Content="Contribute Memory Sample" Click="OnContributeSampleClicked" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Background="#1a232c" CornerRadius="6" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="Diagnostic report" FontSize="14" FontWeight="SemiBold" Foreground="#dce6ea" />
+                                        <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                                                   Text="Every Write Codeplug or Restore run automatically saves a before/after memory backup and a log of every region written. If something looks wrong - including a failure message that points here - send that report so it can be investigated, no need to attach anything yourself or dig through the log panel." />
+                                        <Button x:Name="SendReportButton" Content="Send Diagnostic Report" Click="OnSendReportClicked" IsEnabled="False" />
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </StackPanel>
