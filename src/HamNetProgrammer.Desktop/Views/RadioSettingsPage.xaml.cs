@@ -82,6 +82,11 @@ public sealed partial class RadioSettingsPage : Page
     public RadioSettingsPage()
     {
         this.InitializeComponent();
+        // Without this, Frame.Navigate constructs a brand-new instance every time this page is
+        // selected in the nav - Load() runs again and silently discards any unsaved edits the
+        // moment you navigate away and back, with no warning. Same bug class already found and
+        // fixed on RadioPage's port selection; this page just never got the same fix.
+        this.NavigationCacheMode = Microsoft.UI.Xaml.Navigation.NavigationCacheMode.Enabled;
         Load();
     }
 
