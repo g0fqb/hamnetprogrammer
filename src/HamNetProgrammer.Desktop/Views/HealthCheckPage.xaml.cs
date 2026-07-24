@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using HamNetProgrammer.Core.Data;
+using HamNetProgrammer.Core.Diagnostics;
 using HamNetProgrammer.Desktop.Utils;
 
 namespace HamNetProgrammer.Desktop.Views;
@@ -56,6 +57,40 @@ public sealed partial class HealthCheckPage : Page
         finally
         {
             RunButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnImportMmdvmLogClicked(object sender, RoutedEventArgs e)
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker();
+        picker.FileTypeFilter.Add(".log");
+        picker.FileTypeFilter.Add(".txt");
+        picker.FileTypeFilter.Add("*");
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+        var file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+
+        MmdvmImportButton.IsEnabled = false;
+        ResultsText.Text = "Reading log...";
+
+        try
+        {
+            var logText = await Windows.Storage.FileIO.ReadTextAsync(file);
+            var snapshot = MmdvmLogParser.Parse(logText);
+
+            using var db = CodeplugDatabase.OpenOrCreate(AppPaths.CodeplugDbPath);
+            var result = MmdvmCrossCheck.Run(db, snapshot);
+
+            ResultsText.Text = MmdvmCrossCheck.Format(snapshot, result);
+        }
+        catch (Exception ex)
+        {
+            ResultsText.Text = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            MmdvmImportButton.IsEnabled = true;
         }
     }
 }

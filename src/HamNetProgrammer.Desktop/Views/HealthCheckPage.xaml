@@ -8,6 +8,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -21,10 +22,18 @@
             </StackPanel>
         </Border>
 
-        <Border Grid.Row="2" Background="#1a232c" CornerRadius="6">
+        <Border Grid.Row="2" Background="#1a232c" CornerRadius="6" Padding="14" Margin="0,0,0,12">
+            <StackPanel Spacing="8">
+                <TextBlock FontSize="12" Foreground="#8896a0" TextWrapping="Wrap"
+                           Text="If a hotspot won't decode anything from the radio (keys up, hotspot shows no RF activity), it's almost always a colour code or frequency mismatch - and it's silent, not an error, so there's nothing to spot in the log by eye. Import the hotspot's MMDVMHost log and this compares its configured colour code/frequency/DMR ID directly against whichever channel matches those frequencies in this codeplug." />
+                <Button x:Name="MmdvmImportButton" Content="Import MMDVM Log..." Click="OnImportMmdvmLogClicked" Background="#6bb0b8" Foreground="#10161d" FontWeight="SemiBold" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="3" Background="#1a232c" CornerRadius="6">
             <ScrollViewer Padding="14">
                 <TextBlock x:Name="ResultsText" FontFamily="Consolas" FontSize="12" Foreground="#dce6ea" TextWrapping="Wrap" IsTextSelectionEnabled="True"
-                           Text="Click Run Health Check to scan the current database." />
+                           Text="Click Run Health Check to scan the current database, or Import MMDVM Log to cross-check a hotspot's configuration." />
             </ScrollViewer>
         </Border>
     </Grid>

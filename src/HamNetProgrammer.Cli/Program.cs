@@ -77,6 +77,9 @@ if (args.Length > 0 && args[0].Equals("merge-duplicate-talkgroups", StringCompar
 if (args.Length > 0 && args[0].Equals("health-check", StringComparison.OrdinalIgnoreCase))
     return RunHealthCheck(args.Skip(1).ToArray());
 
+if (args.Length > 0 && args[0].Equals("mmdvm-check", StringComparison.OrdinalIgnoreCase))
+    return RunMmdvmCheck(args.Skip(1).ToArray());
+
 if (args.Length > 0 && args[0].Equals("audit-talkgroups", StringComparison.OrdinalIgnoreCase))
     return await RunAuditTalkGroups(args.Skip(1).ToArray());
 
@@ -1027,6 +1030,33 @@ static int RunMergeDuplicateTalkGroups(string[] mergeArgs)
     }
 
     Console.WriteLine($"Done. {merged} DmrId(s) merged, {skipped} skipped for manual review.");
+    return 0;
+}
+
+static int RunMmdvmCheck(string[] mmdvmArgs)
+{
+    if (mmdvmArgs.Length == 0)
+    {
+        Console.WriteLine("Usage: mmdvm-check <mmdvmhost-logfile> [dbPath]");
+        return 1;
+    }
+
+    var logPath = mmdvmArgs[0];
+    if (!File.Exists(logPath))
+    {
+        Console.WriteLine($"Log file not found: {logPath}");
+        return 1;
+    }
+
+    var dbPath = mmdvmArgs.Length > 1
+        ? mmdvmArgs[1]
+        : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "data", "codeplug.db"));
+
+    var snapshot = MmdvmLogParser.Parse(File.ReadAllText(logPath));
+    using var db = CodeplugDatabase.OpenOrCreate(dbPath);
+    var result = MmdvmCrossCheck.Run(db, snapshot);
+
+    Console.WriteLine(MmdvmCrossCheck.Format(snapshot, result));
     return 0;
 }
 
