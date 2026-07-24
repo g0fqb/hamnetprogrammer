@@ -629,9 +629,11 @@ public static class AnyToneD878CodeplugEncoder
     // Deliberately scoped to Digital APRS reporting via "DMR APRS System 0" (fields for systems
     // 1-7, and the separate Analog/FM APRS fields, exist on the radio but aren't modeled in the
     // RadioSettings schema - out of scope for a hotspot-focused first cut). GPS Mode (GPS/BDS/
-    // GPS+BDS), present in the RadioSettings schema, has no confirmed byte offset in either
-    // independent source checked for this model - likely a D578UV-only field - so it is
-    // deliberately never written here despite existing as a UI/database field.
+    // GPS+BDS) is a real setting - this radio does have GPS, confirmed via the separately-written
+    // GpsEnabled flag above - but has no confirmed byte offset for the mode sub-field specifically,
+    // in either independent source checked for this model, so it is deliberately never written here
+    // despite existing as a UI/database field. Emailed AnyTone 2026-07-23 asking for documentation;
+    // no response as of this writing.
     private const int GpsEnabledOffset = 0x0028;
     private const int AprsAutoTxIntervalOffset = 0x100B;
     private const int AprsLocationOffset = 0x100D; // fixed flag, lat deg/min/sec/sign, lon deg/min/sec/sign (9 bytes)

@@ -170,9 +170,6 @@ public sealed partial class RadioSettingsPage : Page
 
         FormPanel.Children.Add(FormField.SectionHeader("GPS"));
         FormPanel.Children.Add(FormField.Row("GPS", _gpsEnabledBox!, "Turns the radio's built-in GPS receiver on or off."));
-        FormPanel.Children.Add(FormField.Row("GPS Mode (not written to radio yet)", _gpsModeCombo!,
-            "Which satellite system(s) the GPS receiver uses. GPS+BDS gives better coverage in parts of Asia at the cost of slightly higher power use. " +
-            "Saved here, but NOT currently written to the radio - no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
 
         FormPanel.Children.Add(FormField.SectionHeader("APRS"));
         FormPanel.Children.Add(FormField.Row("Report Type", _aprsReportTypeCombo!, "Off disables APRS reporting. Digital sends your position over a DMR talkgroup (the common choice for a hotspot). Analog transmits real APRS packets on an FM frequency."));
@@ -200,13 +197,7 @@ public sealed partial class RadioSettingsPage : Page
         lonRow.Children.Add(_lonSignCombo!);
         FormPanel.Children.Add(FormField.Row("Longitude", lonRow, "Degrees, minutes, and E/W for the fixed position."));
 
-        FormPanel.Children.Add(FormField.SectionHeader("Text"));
-        FormPanel.Children.Add(FormField.Row("APRS Sending Text (not written to radio yet)", _sendingTextBox!,
-            "Free text appended to your outgoing APRS report, e.g. a comment or status. Saved here, but NOT currently written to the radio - " +
-            "no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
-        FormPanel.Children.Add(FormField.Row("GPS Template Text (not written to radio yet)", _gpsTemplateBox!,
-            "Text shown on the radio's display alongside a GPS fix. Saved here, but NOT currently written to the radio - " +
-            "no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
+        FormPanel.Children.Add(BuildNotYetSupportedExpander());
 
         FormPanel.Children.Add(FormField.SectionHeader("Advanced"));
         FormPanel.Children.Add(new TextBlock
@@ -227,6 +218,43 @@ public sealed partial class RadioSettingsPage : Page
             await Launcher.LaunchFolderPathAsync(Path.GetDirectoryName(AppPaths.CodeplugDbPath)!);
         };
         FormPanel.Children.Add(openDbFolderButton);
+    }
+
+    // GPS Mode, APRS Sending Text, and GPS Template Text are real database fields with no confirmed
+    // AT-D878UV byte offset in either reference source this project checks (qdmr, anytone-flash-
+    // tools) - GPS Mode specifically is suspected to be a D578UV-only field that may not even apply
+    // to this radio. Collapsed by default and visually separated from the fields above (which ARE
+    // written) after live testing showed the inline "(not written to radio yet)" label suffix wasn't
+    // enough to stop it reading as a bug/omission rather than a deliberate, documented gap.
+    private Expander BuildNotYetSupportedExpander()
+    {
+        var body = new StackPanel { Spacing = 10 };
+        body.Children.Add(new TextBlock
+        {
+            Text = "This radio does have a real GPS receiver - GPS enabled/disabled above is confirmed and written. These three " +
+                   "fields are narrower than that: which satellite system GPS uses, and two free-text fields shown on the radio's " +
+                   "display. None have a confirmed byte offset in any reference source checked yet. Saved here for your own " +
+                   "reference, but never written to the radio, so nothing here can affect what you write.",
+            FontSize = 12,
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x88, 0x96, 0xa0)),
+            TextWrapping = TextWrapping.Wrap,
+        });
+        body.Children.Add(FormField.Row("GPS Mode", _gpsModeCombo!,
+            "Which satellite system(s) the GPS receiver uses. GPS+BDS gives better coverage in parts of Asia at the cost of slightly higher power use."));
+        body.Children.Add(FormField.Row("APRS Sending Text", _sendingTextBox!,
+            "Free text appended to your outgoing APRS report, e.g. a comment or status."));
+        body.Children.Add(FormField.Row("GPS Template Text", _gpsTemplateBox!,
+            "Text shown on the radio's display alongside a GPS fix."));
+
+        return new Expander
+        {
+            Header = "Not Yet Supported on This Radio",
+            Content = body,
+            IsExpanded = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 14, 0, 0),
+        };
     }
 
     private void OnSaveClicked(object sender, RoutedEventArgs e)
