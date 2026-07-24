@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using HamNetProgrammer.Core.Data;
 using HamNetProgrammer.Desktop.Utils;
 using Microsoft.Data.Sqlite;
+using Windows.System;
 
 namespace HamNetProgrammer.Desktop.Views;
 
@@ -206,6 +207,26 @@ public sealed partial class RadioSettingsPage : Page
         FormPanel.Children.Add(FormField.Row("GPS Template Text (not written to radio yet)", _gpsTemplateBox!,
             "Text shown on the radio's display alongside a GPS fix. Saved here, but NOT currently written to the radio - " +
             "no independently-confirmed byte offset for this field has been found yet, so it's left alone rather than risk writing to an unverified location."));
+
+        FormPanel.Children.Add(FormField.SectionHeader("Advanced"));
+        FormPanel.Children.Add(new TextBlock
+        {
+            Text = "Everything above lives in one open SQLite database file, not a proprietary format - you're welcome to open it " +
+                   "directly with a tool like DB Browser for SQLite if you want to see or query the raw tables. Editing it by hand " +
+                   "isn't dangerous to the app itself, but it IS possible to put data into a shape this app or the AT-D878UV encoder " +
+                   "doesn't expect (e.g. breaking a foreign-key link between a channel and its zone) - back up the file first if you " +
+                   "plan to edit it directly, the same as you would before any bulk change.",
+            FontSize = 12,
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0x88, 0x96, 0xa0)),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+        });
+        var openDbFolderButton = new Button { Content = "Open Database Folder", HorizontalAlignment = HorizontalAlignment.Left };
+        openDbFolderButton.Click += async (_, _) =>
+        {
+            await Launcher.LaunchFolderPathAsync(Path.GetDirectoryName(AppPaths.CodeplugDbPath)!);
+        };
+        FormPanel.Children.Add(openDbFolderButton);
     }
 
     private void OnSaveClicked(object sender, RoutedEventArgs e)
