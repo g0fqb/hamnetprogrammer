@@ -20,7 +20,12 @@ public static class FormField
                 new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
             },
         };
-        var labelBlock = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12 };
+        // TextWrapping must be set explicitly - WinUI3's default NoWrap silently clips any label
+        // too long for labelWidth (caught live: "GPS Mode (not written to radio yet)" rendered as
+        // just "...rad" with no ellipsis or other visual hint it was cut off). Wrapping to a second
+        // line keeps the full text visible instead, same fix philosophy as the earlier zone-name
+        // truncation bug.
+        var labelBlock = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, TextWrapping = TextWrapping.Wrap };
         labelBlock.Inlines.Add(new Run { Text = label });
         if (!string.IsNullOrEmpty(tooltip))
         {
