@@ -165,6 +165,9 @@
                         <Hyperlink NavigateUri="https://radioid.net"><Run Text="radioid.net" /></Hyperlink>'s
                         public user database. Neither is affiliated with this project.
                     </TextBlock>
+                    <TextBlock Foreground="#aabbc4" FontSize="13" TextWrapping="Wrap" Margin="0,6,0,0">
+                        Vibe coded by <Hyperlink NavigateUri="https://claude.com/claude-code"><Run Text="Claude" /></Hyperlink>, directed and hardware-tested by G0FQB.
+                    </TextBlock>
                 </StackPanel>
             </Border>
 
